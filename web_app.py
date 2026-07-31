@@ -8,6 +8,9 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4, LETTER, LEGAL
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 import io
 from werkzeug.utils import secure_filename
 
@@ -25,7 +28,7 @@ def get_db_connection():
         return sqlite3.connect('sisgaleno2026.db')
 
 # ==========================================
-# BASE DE DATOS (NUEVA ESTRUCTURA 4 MÓDULOS)
+# BASE DE DATOS (4 MÓDULOS + CONFIG DE REPORTE)
 # ==========================================
 def init_db():
     conn = get_db_connection()
@@ -87,10 +90,40 @@ def init_db():
         FOREIGN KEY(id_cita) REFERENCES citas(id)
     )''')
     
+    # --- CONFIGURACIÓN AVANZADA (FORMATO DE IMPRESIÓN) ---
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS configuracion_sistema (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        nombre_sistema TEXT DEFAULT 'SISGALENO2026',
+        tamano_hoja TEXT DEFAULT 'A4',
+        logo_path TEXT DEFAULT '',
+        encabezado_texto TEXT DEFAULT 'Laboratorio Clínico',
+        pie_pagina_texto TEXT DEFAULT 'Generado automáticamente por el sistema.',
+        report_header TEXT DEFAULT 'INFORME DE ATENCIÓN CLÍNICA',
+        report_footer TEXT DEFAULT 'Documento generado por SISGALENO2026'
+    )''')
+    cursor.execute("INSERT OR IGNORE INTO configuracion_sistema (id) VALUES (1)")
+    
     conn.commit()
     conn.close()
 
 init_db()
+
+# ==========================================
+# FUNCIONES AUXILIARES
+# ==========================================
+def obtener_configuracion():
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("SELECT nombre_sistema, tamano_hoja, logo_path, encabezado_texto, pie_pagina_texto, report_header, report_footer FROM configuracion_sistema WHERE id = 1")
+    config = cursor.fetchone()
+    conn.close()
+    return config
+
+def obtener_tamano_pagina():
+    config = obtener_configuracion()
+    tamano_str = config[1] if config and config[1] else 'A4'
+    if tamano_str == 'LETTER': return LETTER
+    elif tamano_str == 'LEGAL': return LEGAL
+    else: return A4
 
 # ==========================================
 # DISEÑO Y ESTILOS (NUEVO MENÚ 4 MÓDULOS)
@@ -146,11 +179,14 @@ LAYOUT_BASE = """
                 {% if session['rol'] in ['administrador', 'medico'] %}
                     <a href="{{ url_for('atencion_medica') }}">🩺 Atención Médica</a>
                 {% endif %}
+                {% if session['rol'] == 'administrador' %}
+                    <a href="{{ url_for('configuracion_sistema') }}" class="btn btn-warning" style="padding:5px 15px;">⚙️ Config</a>
+                {% endif %}
                 <a href="{{ url_for('logout') }}" class="btn btn-danger" style="padding: 5px 15px;">Salir</a>
             {% endif %}
         </div>
     </nav>
-    <div class="attribution">Creado by Yonan T:B</div>
+    <div class="attribution">Creado por yonanT.b</div>
     <div class="container">
         <!-- CONTENIDO_DINAMICO -->
     </div>
@@ -428,7 +464,6 @@ def ingresar_resultado(id_orden):
     """
     return render_template_string(LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido))
 
-# NUEVO: SUBIR PDF DE RX / ECOGRAFÍA
 @app.route('/laboratorio/subir_pdf/<int:id_orden>', methods=['GET', 'POST'])
 def subir_imagen(id_orden):
     if 'usuario' not in session: return redirect(url_for('login'))
@@ -458,8 +493,8 @@ def subir_imagen(id_orden):
     archivos = cursor.fetchall()
     conn.close()
     
-    contenido = f"""
-    <h2>Subir Informe (PDF) para Orden #{id_orden}</h2>
+    contenido = """
+    <h2>Subir Informe (PDF) para Orden #{{ id_orden }}</h2>
     {% if mensaje %}<p style="background:#d4edda; padding:10px; border-radius:8px;">{{ mensaje }}</p>{% endif %}
     <form method="POST" enctype="multipart/form-data">
         <label>Seleccionar PDF (RX, Ecografía, Tomografía):</label>
@@ -470,10 +505,10 @@ def subir_imagen(id_orden):
     <h3>Archivos Subidos</h3>
     <ul>{% for a in archivos %}<li><a href="/static/{{ a[2] }}" target="_blank">📄 {{ a[1] }}</a></li>{% endfor %}</ul>
     """
-    return render_template_string(LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido), mensaje=mensaje, archivos=archivos)
+    return render_template_string(LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido), id_orden=id_orden, mensaje=mensaje, archivos=archivos)
 
 # ==========================================
-# MÓDULO 4: ATENCIÓN MÉDICA
+# MÓDULO 4: ATENCIÓN MÉDICA Y GENERACIÓN DE REPORTE
 # ==========================================
 @app.route('/atencion_medica', methods=['GET'])
 def atencion_medica():
@@ -588,6 +623,7 @@ def atender_cita(id_cita):
         </div>
         <button type="submit" class="btn btn-success">Guardar Atención Médica</button>
         <a href="{{ url_for('atencion_medica') }}" class="btn btn-danger">Cancelar</a>
+        <a href="{{ url_for('descargar_reporte_final', id_cita=id_cita) }}" target="_blank" class="btn btn-primary">🖨️ Imprimir Reporte</a>
     </form>
     """
     # Cargar imágenes asociadas a cada orden
@@ -599,6 +635,246 @@ def atender_cita(id_cita):
         conn.close()
 
     return render_template_string(LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido), cita=cita, lab_results=lab_results, imagenes=imagenes_dict)
+
+# ==========================================
+# NUEVA RUTA: IMPRESIÓN DE REPORTE FINAL (FORMATO DE IMPRESIÓN PERSONALIZABLE)
+# ==========================================
+@app.route('/reporte/final/<int:id_cita>')
+def descargar_reporte_final(id_cita):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("""
+        SELECT p.nombre, p.apellido, p.dni, s.nombre, u.usuario, c.fecha_cita
+        FROM citas c
+        JOIN pacientes p ON c.id_paciente = p.id
+        JOIN servicios s ON c.id_servicio = s.id
+        JOIN usuarios u ON c.id_medico = u.id
+        WHERE c.id = ?
+    """, (id_cita,))
+    cita_data = cursor.fetchone()
+    
+    cursor.execute("""
+        SELECT diagnostico, tratamiento, descanso_medico_dias FROM diagnosticos WHERE id_cita = ?
+    """, (id_cita,))
+    diag_data = cursor.fetchone()
+    
+    cursor.execute("""
+        SELECT e.descripcion, o.resultado
+        FROM ordenes_laboratorio o
+        JOIN examenes_catalogo e ON o.id_examen = e.id
+        WHERE o.id_cita = ?
+    """, (id_cita,))
+    lab_results = cursor.fetchall()
+    conn.close()
+    
+    if not cita_data:
+        return "No se encontró la cita.", 404
+
+    config = obtener_configuracion()
+    nombre_sistema = config[0] if config else 'SISGALENO2026'
+    logo_path = config[2] if config else ''
+    report_header = config[5] if config else 'INFORME DE ATENCIÓN CLÍNICA'
+    report_footer = config[6] if config else 'Documento generado por SISGALENO2026'
+    page_size = obtener_tamano_pagina()
+    
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=page_size, topMargin=30, bottomMargin=30)
+    styles = getSampleStyleSheet()
+    elements = []
+    
+    # 1. Logo y Encabezado
+    if logo_path and os.path.exists(os.path.join('static', logo_path)):
+        try:
+            img = ImageReader(os.path.join('static', logo_path))
+            elements.append(Spacer(1, 10))
+        except Exception as e:
+            pass
+    
+    title_style = ParagraphStyle(name='Title', parent=styles['Heading1'], fontSize=14, alignment=1, spaceAfter=20)
+    elements.append(Paragraph(f"<b>{nombre_sistema}</b>", title_style))
+    elements.append(Paragraph(f"<i>{report_header}</i>", styles['Heading2']))
+    elements.append(Spacer(1, 15))
+    
+    # 2. Datos del Paciente y Cita
+    patient_info = f"""
+    <b>Paciente:</b> {cita_data[0]} {cita_data[1]} <br/>
+    <b>DNI:</b> {cita_data[2]} <br/>
+    <b>Servicio:</b> {cita_data[3]} <br/>
+    <b>Médico:</b> Dr. {cita_data[4]} <br/>
+    <b>Fecha de Atención:</b> {cita_data[5]}
+    """
+    elements.append(Paragraph(patient_info, styles['Normal']))
+    elements.append(Spacer(1, 15))
+    
+    # 3. Exámenes de Laboratorio (Tabla)
+    if lab_results:
+        elements.append(Paragraph("<b>Resultados de Laboratorio:</b>", styles['Normal']))
+        table_data = [["Examen Solicitado", "Resultado"]]
+        for lab in lab_results:
+            table_data.append([lab[0], lab[1] if lab[1] else "Pendiente"])
+        
+        table = Table(table_data)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        elements.append(Spacer(1, 10))
+        elements.append(table)
+        elements.append(Spacer(1, 15))
+    
+    # 4. Diagnóstico y Tratamiento
+    if diag_data:
+        elements.append(Paragraph("<b>Diagnóstico Clínico:</b>", styles['Normal']))
+        elements.append(Paragraph(diag_data[0] if diag_data[0] else "No especificado", styles['Normal']))
+        elements.append(Spacer(1, 10))
+        
+        elements.append(Paragraph("<b>Tratamiento / Receta:</b>", styles['Normal']))
+        elements.append(Paragraph(diag_data[1] if diag_data[1] else "No especificado", styles['Normal']))
+        elements.append(Spacer(1, 10))
+        
+        elements.append(Paragraph(f"<b>Descanso Médico:</b> {diag_data[2]} días", styles['Normal']))
+    else:
+        elements.append(Paragraph("No se ha registrado diagnóstico médico.", styles['Normal']))
+    
+    # 5. Pie de Página
+    elements.append(Spacer(1, 30))
+    elements.append(Paragraph(report_footer, styles['Italic']))
+    
+    doc.build(elements)
+    buffer.seek(0)
+    return send_file(buffer, as_attachment=True, download_name=f"Reporte_Clinico_Cita_{id_cita}.pdf", mimetype='application/pdf')
+
+# ==========================================
+# CONFIGURACIÓN DEL SISTEMA (FORMATO DE IMPRESIÓN)
+# ==========================================
+@app.route('/configuracion', methods=['GET', 'POST'])
+def configuracion_sistema():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    mensaje = ""; tipo_mensaje = ""
+    
+    if request.method == 'POST':
+        nombre_sistema = request.form['nombre_sistema']
+        tamano_hoja = request.form['tamano_hoja']
+        encabezado = request.form['encabezado_texto']
+        pie_pagina = request.form['pie_pagina_texto']
+        report_header = request.form['report_header']
+        report_footer = request.form['report_footer']
+        try:
+            conn = get_db_connection(); cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE configuracion_sistema SET 
+                nombre_sistema=?, tamano_hoja=?, encabezado_texto=?, pie_pagina_texto=?, report_header=?, report_footer=?
+                WHERE id=1
+            """, (nombre_sistema, tamano_hoja, encabezado, pie_pagina, report_header, report_footer))
+            conn.commit(); conn.close()
+            mensaje = "Configuración actualizada exitosamente."; tipo_mensaje = "alert-success"
+        except Exception as e:
+            mensaje = f"Error: {str(e)}"; tipo_mensaje = "alert-danger"
+
+    config = obtener_configuracion()
+    
+    contenido_config = """
+    <h2>⚙️ Configuración del Sistema y Formato de Impresión</h2>
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
+        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
+        <form method="POST">
+            <div class="adm-form-grid">
+                <div><label>Nombre del Sistema</label><input type="text" name="nombre_sistema" value="{{ config[0] }}" required></div>
+                <div><label>Tamaño de Hoja (PDF)</label>
+                    <select name="tamano_hoja">
+                        <option value="A4" {% if config[1] == 'A4' %}selected{% endif %}>A4</option>
+                        <option value="LETTER" {% if config[1] == 'LETTER' %}selected{% endif %}>Carta (Letter)</option>
+                        <option value="LEGAL" {% if config[1] == 'LEGAL' %}selected{% endif %}>Oficio (Legal)</option>
+                    </select>
+                </div>
+            </div>
+            <div class="adm-form-grid" style="margin-top:15px;">
+                <div><label>Texto Encabezado General</label><input type="text" name="encabezado_texto" value="{{ config[3] }}"></div>
+                <div><label>Texto Pie de Página General</label><input type="text" name="pie_pagina_texto" value="{{ config[4] }}"></div>
+            </div>
+            
+            <h3 style="color:#0d2b45; margin-top:20px;">📄 Formato de Impresión (Reporte Clínico)</h3>
+            <div class="adm-form-grid">
+                <div><label>Título Principal del Reporte</label><input type="text" name="report_header" value="{{ config[5] }}"></div>
+                <div><label>Texto de Pie de Página del Reporte</label><input type="text" name="report_footer" value="{{ config[6] }}"></div>
+            </div>
+
+            <div style="border-top: 1px solid #ddd; margin-top: 20px; padding-top: 20px;">
+                <h4 style="color: #0d2b45;">Logo de la Institución</h4>
+                {% if config[2] %}
+                    <p>Logo actual: <b>{{ config[2] }}</b></p>
+                    <img src="/static/{{ config[2] }}" style="max-height: 80px; border: 1px solid #ccc; border-radius: 4px;">
+                {% else %}
+                    <p>No hay logo configurado.</p>
+                {% endif %}
+                <div style="margin-top: 10px;">
+                    <a href="{{ url_for('subir_logo') }}" class="btn btn-primary">Cambiar / Subir Logo</a>
+                </div>
+            </div>
+
+            <div class="toolbar" style="margin-top:20px;">
+                <button type="submit" class="btn btn-success">Guardar Configuración</button>
+                <button type="reset" class="btn btn-danger">Resetear</button>
+            </div>
+        </form>
+    </div>
+    """
+    html_conf = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_config)
+    return render_template_string(html_conf, config=config, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
+
+@app.route('/configuracion/subir_logo', methods=['GET', 'POST'])
+def subir_logo():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    mensaje = ""; tipo_mensaje = ""
+    
+    if request.method == 'POST':
+        if 'logo_archivo' not in request.files:
+            mensaje = "No se seleccionó ningún archivo."
+            tipo_mensaje = "alert-danger"
+        else:
+            file = request.files['logo_archivo']
+            if file.filename == '':
+                mensaje = "No se seleccionó ningún archivo."
+                tipo_mensaje = "alert-danger"
+            elif file:
+                filename = secure_filename(file.filename)
+                if not os.path.exists('static'):
+                    os.makedirs('static')
+                # Limpiar la carpeta static de logos antiguos
+                for f in os.listdir('static'):
+                    if f.endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                        os.remove(os.path.join('static', f))
+                
+                file.save(os.path.join('static', filename))
+                conn = get_db_connection(); cursor = conn.cursor()
+                cursor.execute("UPDATE configuracion_sistema SET logo_path=? WHERE id=1", (filename,))
+                conn.commit(); conn.close()
+                return redirect(url_for('configuracion_sistema'))
+
+    contenido_logo = """
+    <h2>Subir Nuevo Logo</h2>
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
+        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
+        <form method="POST" enctype="multipart/form-data">
+            <div class="adm-field">
+                <label>Seleccionar Imagen (PNG, JPG)</label>
+                <input type="file" name="logo_archivo" accept="image/png, image/jpeg" required>
+            </div>
+            <div class="toolbar">
+                <button type="submit" class="btn btn-success">Subir Logo</button>
+                <a href="{{ url_for('configuracion_sistema') }}" class="btn btn-danger">Cancelar</a>
+            </div>
+        </form>
+    </div>
+    """
+    html_logo = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_logo)
+    return render_template_string(html_logo, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
 
 # ==========================================
 # EJECUCIÓN
