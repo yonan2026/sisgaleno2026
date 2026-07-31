@@ -5,8 +5,11 @@ from dotenv import load_dotenv
 from flask import Flask, request, render_template_string, session, redirect, url_for, send_file
 from datetime import datetime
 from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, LETTER, LEGAL
+from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 import io
+from werkzeug.utils import secure_filename
 
 load_dotenv()
 app = Flask(__name__)
@@ -22,7 +25,7 @@ def get_db_connection():
         return sqlite3.connect('sisgaleno2026.db')
 
 # ==========================================
-# BASE DE DATOS
+# BASE DE DATOS (Nuevas tablas: Auditoría y Servicios Médicos)
 # ==========================================
 def init_db():
     conn = get_db_connection()
@@ -39,6 +42,7 @@ def init_db():
     cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('doctor', 'doctor', 'medico') {conflict}")
     cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('lab', 'lab', 'laboratorista') {conflict}")
     cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('nurse', 'nurse', 'enfermera') {conflict}")
+    cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('tecnologo', 'tecnologo', 'tecnologo') {conflict}")
 
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS pacientes ( id {auto_inc}, dni TEXT UNIQUE NOT NULL, nombre TEXT NOT NULL, apellido TEXT NOT NULL, fecha_nacimiento TEXT, telefono TEXT, direccion TEXT, sexo TEXT DEFAULT '', edad INTEGER DEFAULT 0 )''')
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS examenes_secciones ( id {auto_inc}, nombre_seccion TEXT NOT NULL )''')
@@ -107,7 +111,6 @@ def init_db():
         FOREIGN KEY(id_parametro) REFERENCES examenes_parametros(id)
     )''')
     
-    # TABLA DE TRIAJE
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS triaje (
         id {auto_inc},
         id_atencion INTEGER UNIQUE,
@@ -129,11 +132,64 @@ def init_db():
     )''')
     
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS reactivos ( id {auto_inc}, nombre TEXT NOT NULL, cantidad REAL NOT NULL, unidad TEXT, fecha_caducidad TEXT, proveedor TEXT )''')
+
+    # NUEVAS TABLAS PARA CONFIGURACIÓN, AUDITORÍA Y SERVICIOS MÉDICOS
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS configuracion_sistema (
+        id INTEGER PRIMARY KEY DEFAULT 1,
+        nombre_sistema TEXT DEFAULT 'SISGALENO2026',
+        tamano_hoja TEXT DEFAULT 'A4',
+        logo_path TEXT DEFAULT '',
+        encabezado_texto TEXT DEFAULT 'Laboratorio Clínico',
+        pie_pagina_texto TEXT DEFAULT 'Generado automáticamente por el sistema.'
+    )''')
+    cursor.execute("INSERT OR IGNORE INTO configuracion_sistema (id) VALUES (1)")
+    
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS audit_logs (
+        id {auto_inc},
+        usuario TEXT,
+        accion TEXT,
+        tabla TEXT,
+        registro_id INTEGER,
+        fecha_hora TEXT,
+        ip_address TEXT,
+        detalles TEXT
+    )''')
+    
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS medico_servicio (
+        id {auto_inc},
+        id_medico INTEGER,
+        servicio TEXT
+    )''')
     
     conn.commit()
     conn.close()
 
 init_db()
+
+# ==========================================
+# FUNCIONES AUXILIARES (Configuración y Auditoría)
+# ==========================================
+def obtener_configuracion():
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("SELECT nombre_sistema, tamano_hoja, logo_path, encabezado_texto, pie_pagina_texto FROM configuracion_sistema WHERE id = 1")
+    config = cursor.fetchone()
+    conn.close()
+    return config
+
+def log_audit(usuario, accion, tabla, registro_id, detalles=""):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ip = request.remote_addr if request else 'Desconocida'
+        cursor.execute("""
+            INSERT INTO audit_logs (usuario, accion, tabla, registro_id, fecha_hora, ip_address, detalles)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (usuario, accion, tabla, registro_id, fecha_hora, ip, detalles))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"Error al guardar log de auditoría: {e}")
 
 # ==========================================
 # DISEÑO Y ESTILOS CON FONDO DE LABORATORIO
@@ -153,7 +209,7 @@ LAYOUT_BASE = """
         .navbar .logo { font-size: 1.5rem; font-weight: bold; letter-spacing: 1px; color: white; }
         .navbar .logo span { color: #72c6f7; }
         
-        .container { max-width: 1000px; margin: 30px auto; padding: 20px; background: rgba(255, 255, 255, 0.95); border-radius: 16px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15); }
+        .container { max-width: 1100px; margin: 30px auto; padding: 20px; background: rgba(255, 255, 255, 0.95); border-radius: 16px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15); }
         
         .btn { display: inline-block; padding: 10px 24px; margin: 4px; border: none; border-radius: 50px; font-weight: 600; color: white; text-align: center; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         .btn:hover { transform: translateY(-3px); box-shadow: 0 8px 15px rgba(0,0,0,0.2); }
@@ -219,16 +275,20 @@ LAYOUT_BASE = """
             {% if session.get('usuario') %}
                 <span>👤 {{ session['usuario'] }} | Rol: {{ session['rol'] }}</span>
                 <a href="{{ url_for('dashboard') }}">Inicio</a>
-                {% if session['rol'] in ['administrador', 'medico', 'laboratorista', 'enfermera'] %}
+                {% if session['rol'] in ['administrador', 'medico', 'laboratorista', 'enfermera', 'tecnologo'] %}
                     <a href="{{ url_for('pacientes') }}">Pacientes</a>
                 {% endif %}
-                {% if session['rol'] in ['administrador', 'laboratorista'] %}
+                {% if session['rol'] in ['administrador', 'laboratorista', 'tecnologo'] %}
                     <a href="{{ url_for('laboratorio') }}">Laboratorio</a>
                     <a href="{{ url_for('resultados') }}">📊 Resultados</a>
                 {% endif %}
                 {% if session['rol'] == 'administrador' %}
                     <a href="{{ url_for('inventario') }}">📦 Inventario</a>
                     <a href="{{ url_for('catalogo_examenes') }}">📋 Catálogo</a>
+                    <a href="{{ url_for('gestion_usuarios') }}" style="color: #ffc107;">👥 Usuarios</a>
+                    <a href="{{ url_for('servicios_medicos') }}" style="color: #ffc107;">🏥 Médicos</a>
+                    <a href="{{ url_for('configuracion_sistema') }}" style="color: #ffc107;">⚙️ Config</a>
+                    <a href="{{ url_for('auditoria') }}" style="color: #ffc107;">📜 Auditoría</a>
                 {% endif %}
                 <a href="{{ url_for('cambiar_contrasena') }}" class="btn btn-warning" style="padding: 5px 15px; margin: 0 5px;">🔑 Cambiar Contraseña</a>
                 <a href="{{ url_for('logout') }}" class="btn btn-danger" style="padding: 5px 15px;">Salir</a>
@@ -246,15 +306,102 @@ LAYOUT_BASE = """
 """
 
 # ==========================================
-# LOGICA DE PDF Y LABORATORIO
+# LOGICA DE PDF
 # ==========================================
+def obtener_tamano_pagina():
+    config = obtener_configuracion()
+    tamano_str = config[1] if config and config[1] else 'A4'
+    if tamano_str == 'LETTER': return LETTER
+    elif tamano_str == 'LEGAL': return LEGAL
+    else: return A4
+
+def generar_reporte_resultados_pdf(id_atencion):
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("""
+        SELECT p.nombre, p.apellido, p.dni, p.fecha_nacimiento, a.nro_boleta, a.fecha_atencion, a.servicio, a.medico
+        FROM atenciones a
+        JOIN pacientes p ON a.id_paciente = p.id
+        WHERE a.id = ?
+    """, (id_atencion,))
+    datos_atencion = cursor.fetchone()
+    
+    cursor.execute("""
+        SELECT e.descripcion, o.resultado
+        FROM ordenes_laboratorio o
+        JOIN examenes_catalogo e ON o.id_examen = e.id
+        WHERE o.id_atencion = ?
+    """, (id_atencion,))
+    examenes = cursor.fetchall()
+    conn.close()
+    
+    if not datos_atencion or not examenes: return None
+    
+    config = obtener_configuracion()
+    nombre_sistema = config[0] if config else 'SISGALENO2026'
+    logo_path = config[2] if config else ''
+    encabezado = config[3] if config else 'Laboratorio Clínico'
+    pie_pagina = config[4] if config else ''
+    
+    page_size = obtener_tamano_pagina()
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=page_size)
+    width, height = page_size
+
+    if logo_path and os.path.exists(os.path.join('static', logo_path)):
+        try:
+            img = ImageReader(os.path.join('static', logo_path))
+            c.drawImage(img, 20, height - 70, width=80, height=60, preserveAspectRatio=True)
+        except Exception as e:
+            print(f"Error cargando logo: {e}")
+
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(110, height - 40, nombre_sistema)
+    c.setFont("Helvetica", 12)
+    c.drawString(110, height - 55, encabezado)
+    c.line(20, height - 65, width - 20, height - 65)
+
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(20, height - 90, "INFORME DE RESULTADOS")
+    c.setFont("Helvetica", 11)
+    c.drawString(20, height - 110, f"Paciente: {datos_atencion[0]} {datos_atencion[1]}")
+    c.drawString(20, height - 125, f"DNI: {datos_atencion[2]}")
+    c.drawString(20, height - 140, f"Fecha de Emisión: {datos_atencion[5]}")
+    c.drawString(20, height - 155, f"Nro. Boleta: {datos_atencion[4]}")
+    c.drawString(20, height - 170, f"Médico: {datos_atencion[7] if datos_atencion[7] else 'No especificado'}")
+
+    c.setFont("Helvetica-Bold", 11)
+    y_pos = height - 200
+    c.drawString(20, y_pos, "EXAMEN SOLICITADO")
+    c.drawString(300, y_pos, "RESULTADO")
+    c.line(20, y_pos - 5, width - 20, y_pos - 5)
+    
+    y_pos -= 20
+    c.setFont("Helvetica", 11)
+    for ex in examenes:
+        c.drawString(20, y_pos, ex[0])
+        c.drawString(300, y_pos, ex[1] if ex[1] else "Pendiente")
+        y_pos -= 20
+        if y_pos < 50:
+            c.showPage()
+            y_pos = height - 40
+
+    c.setFont("Helvetica-Oblique", 9)
+    c.drawString(20, 30, pie_pagina)
+    
+    c.save()
+    buffer.seek(0)
+    return buffer
+
 def generar_ticket_pdf(paciente_id):
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute("SELECT id, dni, nombre, apellido FROM pacientes WHERE id=?", (paciente_id,))
     paciente = cursor.fetchone(); conn.close()
     if not paciente: return None
+    config = obtener_configuracion()
+    nombre_sistema = config[0] if config else 'SISGALENO2026'
+    
     buffer = io.BytesIO(); c = canvas.Canvas(buffer, pagesize=A4); width, height = A4
-    c.setFont("Helvetica-Bold", 18); c.drawString(30, height - 40, "SISGALENO2026")
+    c.setFont("Helvetica-Bold", 18); c.drawString(30, height - 40, nombre_sistema)
     c.setFont("Helvetica", 10); c.drawString(30, height - 60, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
     c.line(30, height - 85, width - 30, height - 85)
     c.setFont("Helvetica-Bold", 14); c.drawString(30, height - 110, "TICKET DE REGISTRO DE PACIENTE")
@@ -262,7 +409,7 @@ def generar_ticket_pdf(paciente_id):
     c.drawString(30, height - 140, f"ID: {paciente[0]}"); c.drawString(30, height - 160, f"DNI: {paciente[1]}")
     c.drawString(30, height - 180, f"Nombre: {paciente[2]}"); c.drawString(30, height - 200, f"Apellido: {paciente[3]}")
     c.line(30, height - 220, width - 30, height - 220)
-    c.setFont("Helvetica-Oblique", 9); c.drawString(30, height - 250, "Ticket generado automáticamente por SISGALENO2026.")
+    c.setFont("Helvetica-Oblique", 9); c.drawString(30, height - 250, config[4] if config else 'Generado automáticamente por SISGALENO2026.')
     c.save(); buffer.seek(0); return buffer
 
 def buscar_atenciones_web(dni, fecha_desde, fecha_hasta):
@@ -288,9 +435,6 @@ def calcular_total_atencion(id_atencion):
     total = cursor.fetchone()[0]; conn.close()
     return total if total else 0.0
 
-# ==========================================
-# LÓGICA PARA TRIAJE
-# ==========================================
 def obtener_triaje(id_atencion):
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute("SELECT * FROM triaje WHERE id_atencion = ?", (id_atencion,))
@@ -329,10 +473,433 @@ def logout():
 @app.route('/dashboard')
 def dashboard():
     if 'usuario' not in session: return redirect(url_for('login'))
-    contenido_dashboard = """<div class="dashboard-banner"><div><h2>🔬 Bienvenido, {{ session['usuario'] }}</h2><p>Laboratorio Clínico SISGALENO2026</p></div><div style="font-size: 30px;">🧪💉</div></div><div class="menu-grid">{% if session['rol'] in ['administrador', 'medico', 'laboratorista', 'enfermera'] %}<a href="{{ url_for('pacientes') }}" class="menu-item">👤 Pacientes</a>{% endif %}{% if session['rol'] in ['administrador', 'laboratorista'] %}<a href="{{ url_for('laboratorio') }}" class="menu-item">🧪 Laboratorio</a><a href="{{ url_for('resultados') }}" class="menu-item">📊 Resultados</a>{% endif %}{% if session['rol'] == 'administrador' %}<a href="{{ url_for('inventario') }}" class="menu-item">📦 Inventario</a><a href="{{ url_for('catalogo_examenes') }}" class="menu-item">📋 Catálogo</a>{% endif %}</div>"""
+    contenido_dashboard = """<div class="dashboard-banner"><div><h2>🔬 Bienvenido, {{ session['usuario'] }}</h2><p>Laboratorio Clínico SISGALENO2026</p></div><div style="font-size: 30px;">🧪💉</div></div><div class="menu-grid">{% if session['rol'] in ['administrador', 'medico', 'laboratorista', 'enfermera', 'tecnologo'] %}<a href="{{ url_for('pacientes') }}" class="menu-item">👤 Pacientes</a>{% endif %}{% if session['rol'] in ['administrador', 'laboratorista', 'tecnologo'] %}<a href="{{ url_for('laboratorio') }}" class="menu-item">🧪 Laboratorio</a><a href="{{ url_for('resultados') }}" class="menu-item">📊 Resultados</a>{% endif %}{% if session['rol'] == 'administrador' %}<a href="{{ url_for('inventario') }}" class="menu-item">📦 Inventario</a><a href="{{ url_for('catalogo_examenes') }}" class="menu-item">📋 Catálogo</a><a href="{{ url_for('gestion_usuarios') }}" class="menu-item">👥 Usuarios</a><a href="{{ url_for('servicios_medicos') }}" class="menu-item">🏥 Médicos</a><a href="{{ url_for('configuracion_sistema') }}" class="menu-item">⚙️ Config</a><a href="{{ url_for('auditoria') }}" class="menu-item">📜 Auditoría</a>{% endif %}</div>"""
     html_dashboard = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_dashboard)
     return render_template_string(html_dashboard)
 
+# ==========================================
+# GESTIÓN DE USUARIOS (Rol y Eliminación)
+# ==========================================
+@app.route('/gestion_usuarios', methods=['GET'])
+def gestion_usuarios():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("SELECT id, usuario, rol FROM usuarios ORDER BY id DESC")
+    usuarios = cursor.fetchall(); conn.close()
+    
+    contenido_usuarios = """
+    <h2 style="color: #0d2b45;">👥 Gestión de Usuarios</h2>
+    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+        <a href="{{ url_for('agregar_usuario') }}" class="btn btn-success">+ Nuevo Usuario</a>
+    </div>
+    <table>
+        <thead><tr><th>ID</th><th>Usuario</th><th>Rol</th><th>Acciones</th></tr></thead>
+        <tbody>
+            {% for u in usuarios %}
+            <tr>
+                <td>{{ u[0] }}</td>
+                <td><b>{{ u[1] }}</b></td>
+                <td><span class="badge badge-amarillo">{{ u[2] }}</span></td>
+                <td>
+                    <a href="{{ url_for('editar_usuario', id=u[0]) }}" class="btn btn-warning" style="padding: 4px 10px; font-size: 12px;">✏️ Editar Rol</a>
+                    <form method="POST" action="{{ url_for('eliminar_usuario', id=u[0]) }}" style="display:inline;" onsubmit="return confirm('¿Seguro que desea eliminar este usuario?');">
+                        <button type="submit" class="btn btn-danger" style="padding: 4px 10px; font-size: 12px;">🗑️ Eliminar</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    """
+    html_usuarios = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_usuarios)
+    return render_template_string(html_usuarios, usuarios=usuarios)
+
+@app.route('/gestion_usuarios/agregar', methods=['GET', 'POST'])
+def agregar_usuario():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    mensaje = ""; tipo_mensaje = ""
+    if request.method == 'POST':
+        usuario = request.form['usuario']; password = request.form['password']; rol = request.form['rol']
+        try:
+            conn = get_db_connection(); cursor = conn.cursor()
+            cursor.execute("INSERT INTO usuarios (usuario, password, rol) VALUES (?, ?, ?)", (usuario, password, rol))
+            conn.commit(); 
+            log_audit(session['usuario'], 'INSERT', 'usuarios', cursor.lastrowid, f'Usuario creado: {usuario}, Rol: {rol}')
+            conn.close()
+            return redirect(url_for('gestion_usuarios'))
+        except sqlite3.IntegrityError:
+            mensaje = "Error: El nombre de usuario ya existe."; tipo_mensaje = "alert-danger"
+        except Exception as e:
+            mensaje = f"Error: {str(e)}"; tipo_mensaje = "alert-danger"
+    
+    contenido_nuevo = """
+    <h2 style="color: #0d2b45;">Agregar Nuevo Usuario</h2>
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
+        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
+        <form method="POST">
+            <div class="adm-field"><label>Nombre de Usuario</label><input type="text" name="usuario" required></div>
+            <div class="adm-field"><label>Contraseña</label><input type="password" name="password" required></div>
+            <div class="adm-field"><label>Rol</label>
+                <select name="rol" required>
+                    <option value="">Seleccione</option>
+                    <option value="administrador">Administrador</option>
+                    <option value="medico">Médico</option>
+                    <option value="tecnologo">Tecnólogo</option>
+                    <option value="laboratorista">Técnico de Laboratorio</option>
+                    <option value="enfermera">Enfermera</option>
+                </select>
+            </div>
+            <div class="toolbar">
+                <button type="submit" class="btn btn-success">Crear Usuario</button>
+                <a href="{{ url_for('gestion_usuarios') }}" class="btn btn-danger">Cancelar</a>
+            </div>
+        </form>
+    </div>
+    """
+    html_nuevo = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_nuevo)
+    return render_template_string(html_nuevo, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
+
+@app.route('/gestion_usuarios/editar/<int:id>', methods=['GET', 'POST'])
+def editar_usuario(id):
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    conn = get_db_connection(); cursor = conn.cursor()
+    
+    if request.method == 'POST':
+        nuevo_rol = request.form['rol']
+        try:
+            cursor.execute("UPDATE usuarios SET rol=? WHERE id=?", (nuevo_rol, id))
+            conn.commit()
+            log_audit(session['usuario'], 'UPDATE', 'usuarios', id, f'Rol actualizado a: {nuevo_rol}')
+            conn.close()
+            return redirect(url_for('gestion_usuarios'))
+        except Exception as e:
+            conn.close()
+            mensaje = f"Error: {str(e)}"; tipo_mensaje = "alert-danger"
+    else:
+        cursor.execute("SELECT id, usuario, rol FROM usuarios WHERE id=?", (id,))
+        usuario = cursor.fetchone()
+        conn.close()
+        if not usuario: return "Usuario no encontrado", 404
+        mensaje = ""; tipo_mensaje = ""
+
+    contenido_editar = """
+    <h2 style="color: #0d2b45;">Editar Rol de Usuario</h2>
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
+        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
+        <form method="POST">
+            <div class="adm-field"><label>Usuario</label><input type="text" value="{{ usuario[1] }}" disabled style="background:#d1d1d1;"></div>
+            <div class="adm-field"><label>Nuevo Rol</label>
+                <select name="rol" required>
+                    <option value="">Seleccione</option>
+                    <option value="administrador" {% if usuario[2] == 'administrador' %}selected{% endif %}>Administrador</option>
+                    <option value="medico" {% if usuario[2] == 'medico' %}selected{% endif %}>Médico</option>
+                    <option value="tecnologo" {% if usuario[2] == 'tecnologo' %}selected{% endif %}>Tecnólogo</option>
+                    <option value="laboratorista" {% if usuario[2] == 'laboratorista' %}selected{% endif %}>Técnico de Lab</option>
+                    <option value="enfermera" {% if usuario[2] == 'enfermera' %}selected{% endif %}>Enfermera</option>
+                </select>
+            </div>
+            <div class="toolbar">
+                <button type="submit" class="btn btn-success">Guardar Cambios</button>
+                <a href="{{ url_for('gestion_usuarios') }}" class="btn btn-danger">Cancelar</a>
+            </div>
+        </form>
+    </div>
+    """
+    html_edit = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_editar)
+    return render_template_string(html_edit, usuario=usuario, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
+
+@app.route('/gestion_usuarios/eliminar/<int:id>', methods=['POST'])
+def eliminar_usuario(id):
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    try:
+        conn = get_db_connection(); cursor = conn.cursor()
+        cursor.execute("SELECT usuario FROM usuarios WHERE id=?", (id,))
+        res = cursor.fetchone()
+        if res:
+            log_audit(session['usuario'], 'DELETE', 'usuarios', id, f'Usuario eliminado: {res[0]}')
+        cursor.execute("DELETE FROM usuarios WHERE id=?", (id,))
+        conn.commit(); conn.close()
+    except Exception as e:
+        pass
+    return redirect(url_for('gestion_usuarios'))
+
+# ==========================================
+# GESTIÓN DE SERVICIOS MÉDICOS
+# ==========================================
+@app.route('/servicios_medicos', methods=['GET'])
+def servicios_medicos():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("SELECT id, usuario FROM usuarios WHERE rol='medico' ORDER BY usuario")
+    medicos = cursor.fetchall()
+    cursor.execute("SELECT id, nombre_seccion FROM examenes_secciones ORDER BY nombre_seccion")
+    servicios = cursor.fetchall()
+    cursor.execute("SELECT id_medico, servicio FROM medico_servicio")
+    asignaciones = cursor.fetchall()
+    conn.close()
+    
+    contenido_servicios = """
+    <h2 style="color: #0d2b45;">🏥 Asignación de Servicios Médicos</h2>
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
+        <form method="POST" action="{{ url_for('guardar_servicios_medicos') }}">
+            <table>
+                <thead><tr><th>Médico</th><th>Servicio Asignado</th></tr></thead>
+                <tbody>
+                    {% for m in medicos %}
+                    <tr>
+                        <td><b>{{ m[1] }}</b></td>
+                        <td>
+                            <select name="servicio_{{ m[0] }}">
+                                <option value="">Sin Asignación</option>
+                                {% for s in servicios %}
+                                <option value="{{ s[1] }}" {% for a in asignaciones %}{% if a[0] == m[0] and a[1] == s[1] %}selected{% endif %}{% endfor %}>{{ s[1] }}</option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="2" style="text-align:center;">No hay médicos registrados en el sistema.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <div class="toolbar">
+                <button type="submit" class="btn btn-success">Guardar Asignaciones</button>
+                <button type="reset" class="btn btn-danger">Cancelar</button>
+            </div>
+        </form>
+    </div>
+    """
+    html_serv = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_servicios)
+    return render_template_string(html_serv, medicos=medicos, servicios=servicios, asignaciones=asignaciones)
+
+@app.route('/servicios_medicos/guardar', methods=['POST'])
+def guardar_servicios_medicos():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    conn = get_db_connection(); cursor = conn.cursor()
+    # Limpiar asignaciones anteriores
+    cursor.execute("DELETE FROM medico_servicio")
+    for key, value in request.form.items():
+        if key.startswith('servicio_') and value.strip():
+            id_medico = int(key.split('_')[1])
+            servicio = value.strip()
+            cursor.execute("INSERT INTO medico_servicio (id_medico, servicio) VALUES (?, ?)", (id_medico, servicio))
+    conn.commit()
+    log_audit(session['usuario'], 'UPDATE', 'medico_servicio', 0, 'Asignaciones de servicios médicos actualizadas.')
+    conn.close()
+    return redirect(url_for('servicios_medicos'))
+
+# ==========================================
+# CONFIGURACIÓN Y CAMBIO DE FONDO
+# ==========================================
+@app.route('/configuracion', methods=['GET', 'POST'])
+def configuracion_sistema():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    mensaje = ""; tipo_mensaje = ""
+    
+    if request.method == 'POST':
+        nombre_sistema = request.form['nombre_sistema']
+        tamano_hoja = request.form['tamano_hoja']
+        encabezado = request.form['encabezado_texto']
+        pie_pagina = request.form['pie_pagina_texto']
+        try:
+            conn = get_db_connection(); cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE configuracion_sistema SET 
+                nombre_sistema=?, tamano_hoja=?, encabezado_texto=?, pie_pagina_texto=?
+                WHERE id=1
+            """, (nombre_sistema, tamano_hoja, encabezado, pie_pagina))
+            conn.commit()
+            log_audit(session['usuario'], 'UPDATE', 'configuracion_sistema', 1, 'Configuración general actualizada.')
+            conn.close()
+            mensaje = "Configuración actualizada exitosamente."; tipo_mensaje = "alert-success"
+        except Exception as e:
+            mensaje = f"Error: {str(e)}"; tipo_mensaje = "alert-danger"
+
+    config = obtener_configuracion()
+    
+    contenido_config = """
+    <h2 style="color: #0d2b45;">⚙️ Configuración del Sistema</h2>
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
+        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
+        <form method="POST">
+            <div class="adm-field"><label>Nombre del Sistema</label><input type="text" name="nombre_sistema" value="{{ config[0] }}" required></div>
+            <div class="adm-field"><label>Tamaño de Hoja (PDF)</label>
+                <select name="tamano_hoja">
+                    <option value="A4" {% if config[1] == 'A4' %}selected{% endif %}>A4</option>
+                    <option value="LETTER" {% if config[1] == 'LETTER' %}selected{% endif %}>Carta (Letter)</option>
+                    <option value="LEGAL" {% if config[1] == 'LEGAL' %}selected{% endif %}>Oficio (Legal)</option>
+                </select>
+            </div>
+            <div class="adm-field"><label>Texto Encabezado</label><input type="text" name="encabezado_texto" value="{{ config[3] }}"></div>
+            <div class="adm-field"><label>Texto Pie de Página</label><input type="text" name="pie_pagina_texto" value="{{ config[4] }}"></div>
+
+            <div style="border-top: 1px solid #ddd; margin-top: 20px; padding-top: 20px;">
+                <h4 style="color: #0d2b45;">Logo de la Institución</h4>
+                {% if config[2] %}
+                    <p>Logo actual: <b>{{ config[2] }}</b></p>
+                    <img src="/static/{{ config[2] }}" style="max-height: 80px; border: 1px solid #ccc; border-radius: 4px;">
+                {% else %}
+                    <p>No hay logo configurado.</p>
+                {% endif %}
+                <div style="margin-top: 10px;">
+                    <a href="{{ url_for('subir_logo') }}" class="btn btn-primary">Cambiar / Subir Logo</a>
+                </div>
+            </div>
+
+            <div style="border-top: 1px solid #ddd; margin-top: 20px; padding-top: 20px;">
+                <h4 style="color: #0d2b45;">Imagen de Fondo del Sistema</h4>
+                <p>La imagen actual es <b>fondo_lab.jpg</b> en la carpeta static.</p>
+                <div style="margin-top: 10px;">
+                    <a href="{{ url_for('subir_fondo') }}" class="btn btn-primary">Cambiar Fondo del Sistema</a>
+                </div>
+            </div>
+
+            <div class="toolbar">
+                <button type="submit" class="btn btn-success">Guardar Configuración</button>
+                <button type="reset" class="btn btn-danger">Resetear</button>
+            </div>
+        </form>
+    </div>
+    """
+    html_conf = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_config)
+    return render_template_string(html_conf, config=config, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
+
+@app.route('/configuracion/subir_logo', methods=['GET', 'POST'])
+def subir_logo():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    mensaje = ""; tipo_mensaje = ""
+    
+    if request.method == 'POST':
+        if 'logo_archivo' not in request.files:
+            mensaje = "No se seleccionó ningún archivo."
+            tipo_mensaje = "alert-danger"
+        else:
+            file = request.files['logo_archivo']
+            if file.filename == '':
+                mensaje = "No se seleccionó ningún archivo."
+                tipo_mensaje = "alert-danger"
+            elif file:
+                filename = secure_filename(file.filename)
+                if not os.path.exists('static'):
+                    os.makedirs('static')
+                # Limpiar la carpeta static de logos antiguos (manteniendo fondo_lab.jpg)
+                for f in os.listdir('static'):
+                    if f != 'fondo_lab.jpg' and f.endswith(('.png', '.jpg', '.jpeg', '.gif')):
+                        os.remove(os.path.join('static', f))
+                
+                file.save(os.path.join('static', filename))
+                conn = get_db_connection(); cursor = conn.cursor()
+                cursor.execute("UPDATE configuracion_sistema SET logo_path=? WHERE id=1", (filename,))
+                conn.commit()
+                log_audit(session['usuario'], 'UPDATE', 'configuracion_sistema', 1, f'Nuevo logo subido: {filename}')
+                conn.close()
+                return redirect(url_for('configuracion_sistema'))
+
+    contenido_logo = """
+    <h2 style="color: #0d2b45;">Subir Nuevo Logo</h2>
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
+        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
+        <form method="POST" enctype="multipart/form-data">
+            <div class="adm-field">
+                <label>Seleccionar Imagen (PNG, JPG)</label>
+                <input type="file" name="logo_archivo" accept="image/png, image/jpeg" required>
+            </div>
+            <div class="toolbar">
+                <button type="submit" class="btn btn-success">Subir Logo</button>
+                <a href="{{ url_for('configuracion_sistema') }}" class="btn btn-danger">Cancelar</a>
+            </div>
+        </form>
+    </div>
+    """
+    html_logo = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_logo)
+    return render_template_string(html_logo, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
+
+@app.route('/configuracion/subir_fondo', methods=['GET', 'POST'])
+def subir_fondo():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    mensaje = ""; tipo_mensaje = ""
+    
+    if request.method == 'POST':
+        if 'fondo_archivo' not in request.files:
+            mensaje = "No se seleccionó ningún archivo."
+            tipo_mensaje = "alert-danger"
+        else:
+            file = request.files['fondo_archivo']
+            if file.filename == '':
+                mensaje = "No se seleccionó ningún archivo."
+                tipo_mensaje = "alert-danger"
+            elif file:
+                if not os.path.exists('static'):
+                    os.makedirs('static')
+                # Sobrescribir fondo_lab.jpg
+                file.save(os.path.join('static', 'fondo_lab.jpg'))
+                log_audit(session['usuario'], 'UPDATE', 'configuracion_sistema', 1, 'Fondo del sistema actualizado.')
+                return redirect(url_for('configuracion_sistema'))
+
+    contenido_fondo = """
+    <h2 style="color: #0d2b45;">Cambiar Fondo del Sistema</h2>
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
+        <p>Recomendación: Usa una imagen de al menos 1920x1080 píxeles (JPG o PNG).</p>
+        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
+        <form method="POST" enctype="multipart/form-data">
+            <div class="adm-field">
+                <label>Seleccionar Imagen de Fondo</label>
+                <input type="file" name="fondo_archivo" accept="image/png, image/jpeg" required>
+            </div>
+            <div class="toolbar">
+                <button type="submit" class="btn btn-success">Subir y Cambiar Fondo</button>
+                <a href="{{ url_for('configuracion_sistema') }}" class="btn btn-danger">Cancelar</a>
+            </div>
+        </form>
+    </div>
+    """
+    html_fondo = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_fondo)
+    return render_template_string(html_fondo, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
+
+# ==========================================
+# MÓDULO DE AUDITORÍA
+# ==========================================
+@app.route('/auditoria', methods=['GET'])
+def auditoria():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, usuario, accion, tabla, registro_id, fecha_hora, ip_address, detalles 
+        FROM audit_logs ORDER BY fecha_hora DESC LIMIT 200
+    """)
+    logs = cursor.fetchall()
+    conn.close()
+
+    contenido_audit = """
+    <h2 style="color: #0d2b45;">📜 Registro de Auditoría del Sistema</h2>
+    <p style="color:#666; font-size: 13px;">Aquí se registran todas las acciones de creación, modificación y eliminación de los usuarios, pacientes y atenciones.</p>
+    <div style="overflow-x: auto;">
+        <table>
+            <thead><tr><th>Fecha/Hora</th><th>Usuario</th><th>Acción</th><th>Tabla</th><th>ID Reg</th><th>IP</th><th>Detalles</th></tr></thead>
+            <tbody>
+                {% for l in logs %}
+                <tr>
+                    <td style="font-size: 12px;">{{ l[5] }}</td>
+                    <td><b>{{ l[1] }}</b></td>
+                    <td><span class="badge badge-verde" style="font-size: 10px;">{{ l[2] }}</span></td>
+                    <td>{{ l[3] }}</td>
+                    <td>{{ l[4] }}</td>
+                    <td style="font-size: 12px;">{{ l[6] }}</td>
+                    <td style="font-size: 12px; font-style: italic;">{{ l[7] }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="7" style="text-align:center;">No se han registrado acciones aún.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    """
+    html_audit = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_audit)
+    return render_template_string(html_audit, logs=logs)
+
+# ==========================================
+# RUTAS DE PACIENTES
+# ==========================================
 @app.route('/pacientes', methods=['GET', 'POST'])
 def pacientes():
     if 'usuario' not in session: return redirect(url_for('login'))
@@ -345,7 +912,9 @@ def pacientes():
             conn = get_db_connection(); cursor = conn.cursor()
             cursor.execute("INSERT INTO pacientes (dni, nombre, apellido, fecha_nacimiento, telefono, direccion, sexo, edad) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 
                            (dni, nombre, apellido, fecha_nac, telefono, direccion, sexo, edad))
-            nuevo_paciente_id = cursor.lastrowid; conn.commit(); conn.close()
+            nuevo_paciente_id = cursor.lastrowid; conn.commit()
+            log_audit(session['usuario'], 'INSERT', 'pacientes', nuevo_paciente_id, f'Paciente registrado: {nombre} {apellido} (DNI: {dni})')
+            conn.close()
             mensaje = f"Paciente {nombre} {apellido} registrado."; tipo_mensaje = "alert-success"
         except sqlite3.IntegrityError:
             mensaje = "Error: El DNI ya está registrado."; tipo_mensaje = "alert-danger"
@@ -375,7 +944,9 @@ def editar_paciente(id):
         try:
             cursor.execute("UPDATE pacientes SET dni=?, nombre=?, apellido=?, fecha_nacimiento=?, telefono=?, direccion=?, sexo=?, edad=? WHERE id=?", 
                            (dni, nombre, apellido, fecha_nac, telefono, direccion, sexo, edad, id))
-            conn.commit(); conn.close(); return redirect(url_for('pacientes'))
+            conn.commit()
+            log_audit(session['usuario'], 'UPDATE', 'pacientes', id, f'Paciente actualizado: {nombre} {apellido}')
+            conn.close(); return redirect(url_for('pacientes'))
         except Exception as e:
             conn.close(); mensaje = f"Error al actualizar: {str(e)}"
             cursor = conn.cursor(); cursor.execute("SELECT * FROM pacientes WHERE id=?", (id,)); paciente = cursor.fetchone(); conn.close()
@@ -413,7 +984,9 @@ def nueva_atencion(id_paciente):
         VALUES (?, ?, 1, ?, ?, ?, ?)
     """, (id_paciente, nro_boleta, fecha_hoy, hora_hoy, paciente[2], paciente[3]))
     id_atencion = cursor.lastrowid
-    conn.commit(); conn.close()
+    conn.commit()
+    log_audit(session['usuario'], 'INSERT', 'atenciones', id_atencion, f'Nueva atención creada para el paciente ID {id_paciente}')
+    conn.close()
     
     return redirect(url_for('gestion_admision', id_atencion=id_atencion))
 
@@ -434,7 +1007,7 @@ def gestion_admision(id_atencion):
     examenes = obtener_examenes_por_atencion(id_atencion)
     total = calcular_total_atencion(id_atencion)
     catalogo = obtener_examenes_catalogo()
-    triaje = obtener_triaje(id_atencion)  # <-- Obtener datos de triaje
+    triaje = obtener_triaje(id_atencion)
     
     mensaje = ""; tipo_mensaje = ""
     
@@ -460,7 +1033,9 @@ def gestion_admision(id_atencion):
                     pst_hosp_origen=?, servicio=?, medico=?, nro_cama=?
                     WHERE id=?
                 """, (historia, sexo, edad, tipo_pac, detalle, origen, pst_hosp, servicio, medico, nro_cama, id_atencion))
-                conn.commit(); conn.close()
+                conn.commit()
+                log_audit(session['usuario'], 'UPDATE', 'atenciones', id_atencion, f'Datos F3 actualizados. Servicio: {servicio}, Médico: {medico}')
+                conn.close()
                 mensaje = "Datos de Atención guardados."; tipo_mensaje = "alert-success"
             except Exception as e:
                 mensaje = f"Error: {str(e)}"; tipo_mensaje = "alert-danger"
@@ -470,7 +1045,10 @@ def gestion_admision(id_atencion):
                 conn = get_db_connection(); cursor = conn.cursor()
                 cursor.execute("INSERT INTO ordenes_laboratorio (id_paciente, id_examen, id_atencion, fecha_emision, estado, resultado, precio) VALUES (?, ?, ?, ?, 'Pendiente', '', ?)", 
                                (atencion[4], id_examen, id_atencion, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), precio))
-                conn.commit(); conn.close()
+                nuevo_id = cursor.lastrowid
+                conn.commit()
+                log_audit(session['usuario'], 'INSERT', 'ordenes_laboratorio', nuevo_id, f'Examen agregado a atención {id_atencion}')
+                conn.close()
                 return redirect(url_for('gestion_admision', id_atencion=id_atencion))
             except Exception as e:
                 mensaje = f"Error: {str(e)}"; tipo_mensaje = "alert-danger"
@@ -478,7 +1056,9 @@ def gestion_admision(id_atencion):
             conn = get_db_connection(); cursor = conn.cursor()
             cursor.execute("DELETE FROM ordenes_laboratorio WHERE id_atencion = ?", (id_atencion,))
             cursor.execute("DELETE FROM atenciones WHERE id = ?", (id_atencion,))
-            conn.commit(); conn.close()
+            conn.commit()
+            log_audit(session['usuario'], 'DELETE', 'atenciones', id_atencion, 'Atención eliminada completamente.')
+            conn.close()
             return redirect(url_for('laboratorio'))
         elif accion == 'buscar_paciente':
             dni_busq = request.form.get('dni_busqueda', '').strip()
@@ -491,7 +1071,6 @@ def gestion_admision(id_atencion):
                 else:
                     mensaje = "Paciente no encontrado con ese DNI."; tipo_mensaje = "alert-danger"
         elif accion == 'guardar_triaje':
-            # Guardar Triaje (Solo enfermeras o admin)
             if session['rol'] not in ['enfermera', 'administrador']:
                 mensaje = "No tienes permisos para realizar triaje."
                 tipo_mensaje = "alert-danger"
@@ -513,12 +1092,13 @@ def gestion_admision(id_atencion):
                     enfermera = session['usuario']
                     
                     conn = get_db_connection(); cursor = conn.cursor()
-                    # Insert or Replace para asegurar que solo haya un triaje por atención
                     cursor.execute("""
                         INSERT OR REPLACE INTO triaje (id_atencion, fecha_hora, enfermera, presion_sistolica, presion_diastolica, frecuencia_cardiaca, frecuencia_respiratoria, temperatura, saturacion_oxigeno, peso, talla, imc, glasgow, dolor, observaciones)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (id_atencion, fecha_hora, enfermera, presion_sis, presion_dias, fc, fr, temp, sat, peso, talla, imc, glasgow, dolor, obs))
-                    conn.commit(); conn.close()
+                    conn.commit()
+                    log_audit(session['usuario'], 'INSERT', 'triaje', id_atencion, f'Triaje registrado por {enfermera}')
+                    conn.close()
                     mensaje = "Triaje guardado exitosamente."; tipo_mensaje = "alert-success"
                 except Exception as e:
                     mensaje = f"Error al guardar triaje: {str(e)}"; tipo_mensaje = "alert-danger"
@@ -532,7 +1112,6 @@ def gestion_admision(id_atencion):
             document.getElementById("tab_"+nombre).classList.add("active");
             document.getElementById("btn_"+nombre).classList.add("active");
         }
-
         function calcularIMC() {
             var peso = parseFloat(document.getElementById('peso').value);
             var talla = parseFloat(document.getElementById('talla').value);
@@ -549,13 +1128,11 @@ def gestion_admision(id_atencion):
     <div class="tabs">
         <div class="tab-btn active" id="btn_f3" onclick="abrirPestana('f3')">F3 - ATENCIÓN</div>
         <div class="tab-btn" id="btn_f4" onclick="abrirPestana('f4')">F4 - EXÁMENES</div>
-        <!-- La pestaña F5 es visible para enfermeras, médicos y admin -->
         {% if session['rol'] in ['enfermera', 'medico', 'administrador'] %}
             <div class="tab-btn" id="btn_f5" onclick="abrirPestana('f5')">F5 - TRIAJE</div>
         {% endif %}
     </div>
 
-    <!-- PESTAÑA F3: ATENCIÓN -->
     <div id="tab_f3" class="tab-content active">
         {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
         
@@ -608,7 +1185,6 @@ def gestion_admision(id_atencion):
         </div>
     </div>
 
-    <!-- PESTAÑA F4: EXÁMENES -->
     <div id="tab_f4" class="tab-content">
         <h3 style="color: #0d2b45; font-size: 18px; margin-top:0;">F4 - EXÁMENES SOLICITADOS</h3>
         <div style="overflow-x: auto;">
@@ -661,14 +1237,12 @@ def gestion_admision(id_atencion):
         </div>
     </div>
 
-    <!-- PESTAÑA F5: TRIAJE (Nurse / Medico / Admin) -->
     <div id="tab_f5" class="tab-content">
         {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
         
         <h3 style="color: #0d2b45; font-size: 18px; margin-top:0;">F5 - REGISTRO DE TRIAJE</h3>
         
         {% if session['rol'] in ['enfermera', 'administrador'] %}
-            <!-- MODO FORMULARIO: PARA LA ENFERMERA / ADMIN -->
             <div style="background: #f8f9fa; padding: 20px; border-radius: 12px; border: 1px solid #ddd;">
                 <h4 style="color: #0d2b45; margin-top:0;">Ingreso de Signos Vitales</h4>
                 <form method="POST">
@@ -696,7 +1270,6 @@ def gestion_admision(id_atencion):
             </div>
         {% endif %}
 
-        <!-- MODO VISUALIZACIÓN: PARA EL MÉDICO Y ADMIN -->
         <div style="background: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #ddd; margin-top: 15px;">
             <h4 style="color: #0d2b45; margin-top:0;">📋 Vista de Enfermería</h4>
             {% if triaje %}
@@ -731,11 +1304,11 @@ def gestion_admision(id_atencion):
     return render_template_string(html_admision, atencion=atencion, examenes=examenes, total=total, catalogo=catalogo, triaje=triaje, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
 
 # ==========================================
-# NUEVA PANTALLA DE RESULTADOS Y CAMBIO DE CONTRASEÑA
+# RESULTADOS E IMPRESIÓN
 # ==========================================
 @app.route('/resultados', methods=['GET'])
 def resultados():
-    if 'usuario' not in session or session['rol'] not in ['administrador', 'laboratorista']:
+    if 'usuario' not in session or session['rol'] not in ['administrador', 'laboratorista', 'tecnologo']:
         return redirect(url_for('login'))
     
     conn = get_db_connection(); cursor = conn.cursor()
@@ -763,7 +1336,10 @@ def resultados():
                     <td><b>{{ p[1] }} {{ p[2] }}</b></td>
                     <td>{{ p[3] }}</td>
                     <td><span class="badge badge-amarillo">{{ p[4] }}</span></td>
-                    <td><a href="{{ url_for('ingresar_resultados', id_orden=p[0]) }}" class="btn btn-success" style="padding: 5px 15px;">Ingresar</a></td>
+                    <td>
+                        <a href="{{ url_for('ingresar_resultados', id_orden=p[0]) }}" class="btn btn-success" style="padding: 5px 15px;">Ingresar</a>
+                        <a href="{{ url_for('descargar_reporte_atencion', id_atencion=p[5]) }}" class="btn btn-primary" style="padding: 5px 15px;">📄 Imprimir</a>
+                    </td>
                 </tr>
                 {% else %}
                 <tr><td colspan="5" style="text-align:center;">No hay exámenes pendientes de resultados.</td></tr>
@@ -777,7 +1353,7 @@ def resultados():
 
 @app.route('/resultados/ingresar/<int:id_orden>', methods=['GET', 'POST'])
 def ingresar_resultados(id_orden):
-    if 'usuario' not in session or session['rol'] not in ['administrador', 'laboratorista']:
+    if 'usuario' not in session or session['rol'] not in ['administrador', 'laboratorista', 'tecnologo']:
         return redirect(url_for('login'))
     
     conn = get_db_connection(); cursor = conn.cursor()
@@ -801,7 +1377,9 @@ def ingresar_resultados(id_orden):
                         cursor.execute("INSERT OR REPLACE INTO resultados_detalles (id_orden_laboratorio, id_parametro, resultado) VALUES (?, ?, ?)", 
                                        (id_orden, id_param, resultado_val))
             cursor.execute("UPDATE ordenes_laboratorio SET estado='Completado' WHERE id=?", (id_orden,))
-            conn.commit(); conn.close()
+            conn.commit()
+            log_audit(session['usuario'], 'UPDATE', 'ordenes_laboratorio', id_orden, f'Resultados guardados para orden {id_orden}')
+            conn.close()
             return redirect(url_for('resultados'))
         except Exception as e:
             conn.close()
@@ -852,87 +1430,19 @@ def ingresar_resultados(id_orden):
     html_ingreso = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_ingreso)
     return render_template_string(html_ingreso, orden=orden, parametros=parametros, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
 
-# ==========================================
-# RUTA PARA CAMBIO DE CONTRASEÑA
-# ==========================================
-@app.route('/cambiar_contrasena', methods=['GET', 'POST'])
-def cambiar_contrasena():
-    if 'usuario' not in session:
-        return redirect(url_for('login'))
-    
-    mensaje = ""
-    tipo_mensaje = ""
-    usuario_actual = session['usuario']
-    
-    if request.method == 'POST':
-        pass_anterior = request.form.get('pass_anterior', '')
-        pass_nuevo = request.form.get('pass_nuevo', '')
-        pass_confirm = request.form.get('pass_confirm', '')
-        
-        if not pass_anterior or not pass_nuevo or not pass_confirm:
-            mensaje = "Todos los campos son obligatorios."
-            tipo_mensaje = "alert-danger"
-        elif pass_nuevo != pass_confirm:
-            mensaje = "La nueva contraseña y la confirmación no coinciden."
-            tipo_mensaje = "alert-danger"
-        elif pass_nuevo == pass_anterior:
-            mensaje = "La nueva contraseña no puede ser igual a la anterior."
-            tipo_mensaje = "alert-danger"
-        else:
-            try:
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT id FROM usuarios WHERE usuario=? AND password=?", (usuario_actual, pass_anterior))
-                user = cursor.fetchone()
-                if not user:
-                    mensaje = "La contraseña anterior es incorrecta."
-                    tipo_mensaje = "alert-danger"
-                else:
-                    cursor.execute("UPDATE usuarios SET password=? WHERE usuario=?", (pass_nuevo, usuario_actual))
-                    conn.commit()
-                    mensaje = "¡Contraseña actualizada exitosamente! Por favor, vuelva a iniciar sesión."
-                    tipo_mensaje = "alert-success"
-                    conn.close()
-                    session.clear()
-                    return redirect(url_for('login'))
-                conn.close()
-            except Exception as e:
-                mensaje = f"Error al cambiar la contraseña: {str(e)}"
-                tipo_mensaje = "alert-danger"
-
-    contenido_contraseña = """
-    <div class="pass-dialog">
-        <h3>🔐 Cambio de Contraseña</h3>
-        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
-        <form method="POST">
-            <div class="adm-field">
-                <label>CONTRASEÑA ANTERIOR</label>
-                <input type="password" name="pass_anterior" placeholder="Ingrese su contraseña actual" required>
-            </div>
-            <div class="adm-field">
-                <label>CONTRASEÑA NUEVA</label>
-                <input type="password" name="pass_nuevo" placeholder="Ingrese la nueva contraseña" required>
-            </div>
-            <div class="adm-field">
-                <label>CONFIRMAR CONTRASEÑA NUEVA:</label>
-                <input type="password" name="pass_confirm" placeholder="Vuelva a escribir la nueva contraseña" required>
-            </div>
-            <div class="toolbar" style="justify-content: center; border-top: none; padding-top: 10px;">
-                <button type="submit" class="btn btn-success">✔ Aceptar</button>
-                <a href="{{ url_for('dashboard') }}" class="btn btn-danger">✖ Cancelar</a>
-            </div>
-        </form>
-    </div>
-    """
-    html_pwd = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_contraseña)
-    return render_template_string(html_pwd, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
+@app.route('/reporte/<int:id_atencion>')
+def descargar_reporte_atencion(id_atencion):
+    if 'usuario' not in session: return redirect(url_for('login'))
+    pdf_buffer = generar_reporte_resultados_pdf(id_atencion)
+    if not pdf_buffer: return "No se pudo generar el reporte.", 404
+    return send_file(pdf_buffer, as_attachment=True, download_name=f"Reporte_Atencion_{id_atencion}.pdf", mimetype='application/pdf')
 
 # ==========================================
 # RUTAS DE LABORATORIO
 # ==========================================
 @app.route('/laboratorio', methods=['GET'])
 def laboratorio():
-    if 'usuario' not in session or session['rol'] not in ['administrador', 'laboratorista']: return redirect(url_for('login'))
+    if 'usuario' not in session or session['rol'] not in ['administrador', 'laboratorista', 'tecnologo']: return redirect(url_for('login'))
     dni = request.args.get('dni', ''); fecha_desde = request.args.get('fecha_desde', ''); fecha_hasta = request.args.get('fecha_hasta', '')
     atenciones = buscar_atenciones_web(dni, fecha_desde, fecha_hasta)
     
@@ -1044,8 +1554,85 @@ def ingreso_rapido_paciente():
         cursor.execute("INSERT INTO pacientes (dni, nombre, apellido) VALUES (?, ?, ?)", (dni, nombre, apellido))
         id_paciente = cursor.lastrowid
         conn.commit()
+        log_audit(session['usuario'], 'INSERT', 'pacientes', id_paciente, f'Paciente registrado vía ingreso rápido: {nombre} {apellido}')
         conn.close()
         return redirect(url_for('nueva_atencion', id_paciente=id_paciente))
+
+# ==========================================
+# CAMBIO DE CONTRASEÑA
+# ==========================================
+@app.route('/cambiar_contrasena', methods=['GET', 'POST'])
+def cambiar_contrasena():
+    if 'usuario' not in session:
+        return redirect(url_for('login'))
+    
+    mensaje = ""
+    tipo_mensaje = ""
+    usuario_actual = session['usuario']
+    
+    if request.method == 'POST':
+        pass_anterior = request.form.get('pass_anterior', '')
+        pass_nuevo = request.form.get('pass_nuevo', '')
+        pass_confirm = request.form.get('pass_confirm', '')
+        
+        if not pass_anterior or not pass_nuevo or not pass_confirm:
+            mensaje = "Todos los campos son obligatorios."
+            tipo_mensaje = "alert-danger"
+        elif pass_nuevo != pass_confirm:
+            mensaje = "La nueva contraseña y la confirmación no coinciden."
+            tipo_mensaje = "alert-danger"
+        elif pass_nuevo == pass_anterior:
+            mensaje = "La nueva contraseña no puede ser igual a la anterior."
+            tipo_mensaje = "alert-danger"
+        else:
+            try:
+                conn = get_db_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM usuarios WHERE usuario=? AND password=?", (usuario_actual, pass_anterior))
+                user = cursor.fetchone()
+                if not user:
+                    mensaje = "La contraseña anterior es incorrecta."
+                    tipo_mensaje = "alert-danger"
+                else:
+                    cursor.execute("UPDATE usuarios SET password=? WHERE usuario=?", (pass_nuevo, usuario_actual))
+                    conn.commit()
+                    log_audit(session['usuario'], 'UPDATE', 'usuarios', user[0], 'Contraseña actualizada')
+                    mensaje = "¡Contraseña actualizada exitosamente! Por favor, vuelva a iniciar sesión."
+                    tipo_mensaje = "alert-success"
+                    conn.close()
+                    session.clear()
+                    return redirect(url_for('login'))
+                conn.close()
+            except Exception as e:
+                mensaje = f"Error al cambiar la contraseña: {str(e)}"
+                tipo_mensaje = "alert-danger"
+
+    contenido_contraseña = """
+    <div class="pass-dialog">
+        <h3>🔐 Cambio de Contraseña</h3>
+        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
+        <form method="POST">
+            <div class="adm-field">
+                <label>CONTRASEÑA ANTERIOR</label>
+                <input type="password" name="pass_anterior" placeholder="Ingrese su contraseña actual" required>
+            </div>
+            <div class="adm-field">
+                <label>CONTRASEÑA NUEVA</label>
+                <input type="password" name="pass_nuevo" placeholder="Ingrese la nueva contraseña" required>
+            </div>
+            <div class="adm-field">
+                <label>CONFIRMAR CONTRASEÑA NUEVA:</label>
+                <input type="password" name="pass_confirm" placeholder="Vuelva a escribir la nueva contraseña" required>
+            </div>
+            <div class="toolbar" style="justify-content: center; border-top: none; padding-top: 10px;">
+                <button type="submit" class="btn btn-success">✔ Aceptar</button>
+                <a href="{{ url_for('dashboard') }}" class="btn btn-danger">✖ Cancelar</a>
+            </div>
+        </form>
+    </div>
+    """
+    html_pwd = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_contraseña)
+    return render_template_string(html_pwd, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
 
 # ==========================================
 # INVENTARIO Y CATÁLOGO
@@ -1161,7 +1748,9 @@ def nuevo_examen_catalogo():
                         VALUES (?, ?, ?, ?, ?)
                     """, (id_examen, nombres_param[i].strip(), unidades_param[i].strip(), normales_param[i].strip(), i+1))
             
-            conn.commit(); conn.close()
+            conn.commit()
+            log_audit(session['usuario'], 'INSERT', 'examenes_catalogo', id_examen, f'Nuevo examen creado: {descripcion}')
+            conn.close()
             return redirect(url_for('catalogo_examenes'))
         except Exception as e:
             mensaje = f"Error: {str(e)}"; tipo_mensaje = "alert-danger"
@@ -1194,116 +1783,4 @@ def nuevo_examen_catalogo():
             <div id="params_container">
                 <div class="adm-form-grid">
                     <div class="adm-field"><label>Nombre Parámetro</label><input type="text" name="param_nombre[]" required></div>
-                    <div class="adm-field"><label>Unidad</label><input type="text" name="param_unidad[]"></div>
-                    <div class="adm-field"><label>Valor Normal</label><input type="text" name="param_normal[]"></div>
-                </div>
-            </div>
-            <button type="button" onclick="agregarParam()" class="btn btn-warning" style="margin-bottom: 15px;">+ Agregar Parámetro</button>
-            
-            <div class="toolbar">
-                <button type="submit" class="btn btn-success">Graba</button>
-                <button type="reset" class="btn btn-danger">Cancela</button>
-                <a href="{{ url_for('catalogo_examenes') }}" class="btn btn-secondary" style="background:#555; color:white;">Salir</a>
-            </div>
-        </form>
-    </div>
-    <script>
-        function agregarParam() {
-            var container = document.getElementById("params_container");
-            var newDiv = document.createElement("div");
-            newDiv.className = "adm-form-grid";
-            newDiv.style.marginTop = "10px";
-            newDiv.innerHTML = `
-                <div class="adm-field"><label>Nombre Parámetro</label><input type="text" name="param_nombre[]" required></div>
-                <div class="adm-field"><label>Unidad</label><input type="text" name="param_unidad[]"></div>
-                <div class="adm-field"><label>Valor Normal</label><input type="text" name="param_normal[]"></div>
-            `;
-            container.appendChild(newDiv);
-        }
-    </script>
-    """
-    html_form = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_form)
-    return render_template_string(html_form, secciones=secciones, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
-
-@app.route('/catalogo_examenes/editar/<int:id>', methods=['GET', 'POST'])
-def editar_examen_catalogo(id):
-    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
-    secciones = obtener_secciones()
-    conn = get_db_connection(); cursor = conn.cursor()
-    
-    if request.method == 'POST':
-        codigo = request.form['codigo']; descripcion = request.form['descripcion']
-        id_seccion = int(request.form['id_seccion']) if request.form['id_seccion'] else None
-        precio = float(request.form['precio']) if request.form['precio'] else 0.0
-        abreviatura = request.form['abreviatura']; interviene = request.form['interviene_reporte']
-        epidemiologico = request.form['epidemiologico']; valor_normal = request.form['valor_normal']
-        activo = 1 if request.form.get('activo') else 0
-        
-        try:
-            cursor.execute("""
-                UPDATE examenes_catalogo SET codigo=?, descripcion=?, id_seccion=?, precio=?, abreviatura=?, interviene_reporte=?, epidemiologico=?, valor_normal=?, activo=?
-                WHERE id=?
-            """, (codigo, descripcion, id_seccion, precio, abreviatura, interviene, epidemiologico, valor_normal, activo, id))
-            conn.commit(); conn.close()
-            return redirect(url_for('catalogo_examenes'))
-        except Exception as e:
-            mensaje = f"Error: {str(e)}"; tipo_mensaje = "alert-danger"
-            conn.rollback()
-        finally:
-            conn.close()
-
-    else:
-        cursor.execute("SELECT * FROM examenes_catalogo WHERE id=?", (id,))
-        examen = cursor.fetchone()
-        if not examen: return "Examen no encontrado", 404
-        conn.close()
-        mensaje = ""; tipo_mensaje = ""
-
-    contenido_editar = """
-    <h2 style="color: #0d2b45;">Editar Examen de Laboratorio</h2>
-    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
-        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
-        <form method="POST">
-            <div class="adm-form-grid">
-                <div class="adm-field"><label>Código</label><input type="text" name="codigo" value="{{ examen[1] }}"></div>
-                <div class="adm-field"><label>Descripción</label><input type="text" name="descripcion" value="{{ examen[2] }}" required></div>
-                <div class="adm-field"><label>Sección</label>
-                    <select name="id_seccion"><option value="">Seleccione</option>
-                    {% for s in secciones %}<option value="{{ s[0] }}" {% if s[0] == examen[3] %}selected{% endif %}>{{ s[1] }}</option>{% endfor %}
-                    </select>
-                </div>
-                <div class="adm-field"><label>Precio (S/.)</label><input type="number" step="0.01" name="precio" value="{{ examen[4] }}"></div>
-                <div class="adm-field"><label>Abreviatura</label><input type="text" name="abreviatura" value="{{ examen[5] }}"></div>
-                <div class="adm-field"><label>Interviene en Reporte</label>
-                    <select name="interviene_reporte"><option value="SI" {% if examen[6] == 'SI' %}selected{% endif %}>SI</option><option value="NO" {% if examen[6] == 'NO' %}selected{% endif %}>NO</option></select>
-                </div>
-                <div class="adm-field"><label>Epidemiológico</label>
-                    <select name="epidemiologico"><option value="NO" {% if examen[7] == 'NO' %}selected{% endif %}>NO</option><option value="SI" {% if examen[7] == 'SI' %}selected{% endif %}>SI</option></select>
-                </div>
-                <div class="adm-field"><label>Activo</label>
-                    <select name="activo"><option value="1" {% if examen[9] == 1 %}selected{% endif %}>Activo</option><option value="0" {% if examen[9] == 0 %}selected{% endif %}>Inactivo</option></select>
-                </div>
-            </div>
-            <div class="adm-field"><label>Valor Normal General</label><textarea name="valor_normal" rows="3">{{ examen[8] }}</textarea></div>
-            
-            <div class="toolbar">
-                <button type="submit" class="btn btn-success">Graba</button>
-                <button type="reset" class="btn btn-danger">Cancela</button>
-                <a href="{{ url_for('catalogo_examenes') }}" class="btn btn-secondary" style="background:#555; color:white;">Salir</a>
-            </div>
-        </form>
-    </div>
-    """
-    html_edit = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_editar)
-    return render_template_string(html_edit, examen=examen, secciones=secciones, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
-
-def obtener_secciones():
-    conn = get_db_connection(); cursor = conn.cursor()
-    cursor.execute("SELECT id, nombre_seccion FROM examenes_secciones ORDER BY id ASC")
-    datos = cursor.fetchall(); conn.close(); return datos
-
-# ==========================================
-# EJECUCIÓN
-# ==========================================
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True)
+                    <div class="adm-field"><label>Unidad</label><input
