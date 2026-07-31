@@ -38,6 +38,7 @@ def init_db():
     cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('admin', 'admin', 'administrador') {conflict}")
     cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('doctor', 'doctor', 'medico') {conflict}")
     cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('lab', 'lab', 'laboratorista') {conflict}")
+    cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('nurse', 'nurse', 'enfermera') {conflict}")
 
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS pacientes ( id {auto_inc}, dni TEXT UNIQUE NOT NULL, nombre TEXT NOT NULL, apellido TEXT NOT NULL, fecha_nacimiento TEXT, telefono TEXT, direccion TEXT, sexo TEXT DEFAULT '', edad INTEGER DEFAULT 0 )''')
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS examenes_secciones ( id {auto_inc}, nombre_seccion TEXT NOT NULL )''')
@@ -106,6 +107,27 @@ def init_db():
         FOREIGN KEY(id_parametro) REFERENCES examenes_parametros(id)
     )''')
     
+    # TABLA DE TRIAJE
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS triaje (
+        id {auto_inc},
+        id_atencion INTEGER UNIQUE,
+        fecha_hora TEXT,
+        enfermera TEXT,
+        presion_sistolica INTEGER,
+        presion_diastolica INTEGER,
+        frecuencia_cardiaca INTEGER,
+        frecuencia_respiratoria INTEGER,
+        temperatura REAL,
+        saturacion_oxigeno INTEGER,
+        peso REAL,
+        talla REAL,
+        imc REAL,
+        glasgow INTEGER,
+        dolor INTEGER,
+        observaciones TEXT,
+        FOREIGN KEY(id_atencion) REFERENCES atenciones(id)
+    )''')
+    
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS reactivos ( id {auto_inc}, nombre TEXT NOT NULL, cantidad REAL NOT NULL, unidad TEXT, fecha_caducidad TEXT, proveedor TEXT )''')
     
     conn.commit()
@@ -114,7 +136,7 @@ def init_db():
 init_db()
 
 # ==========================================
-# DISEÑO Y ESTILOS (LAYOUT CON NAVEGACIÓN Y CONTRASEÑA)
+# DISEÑO Y ESTILOS CON FONDO DE LABORATORIO
 # ==========================================
 LAYOUT_BASE = """
 <!DOCTYPE html>
@@ -123,14 +145,16 @@ LAYOUT_BASE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SISGALENO2026 - Laboratorio Clínico</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background: #f4f7f6; color: #333; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; color: #333; background-image: url('/static/fondo_lab.jpg'); background-size: cover; background-attachment: fixed; background-position: center; }
         a { text-decoration: none; }
         .navbar { background: linear-gradient(90deg, #0d2b45 0%, #1a4d70 100%); color: white; padding: 15px 30px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         .navbar a { color: #f8f9fa; margin: 0 12px; font-weight: 500; transition: 0.3s; }
         .navbar a:hover { color: #72c6f7; transform: translateY(-1px); }
         .navbar .logo { font-size: 1.5rem; font-weight: bold; letter-spacing: 1px; color: white; }
         .navbar .logo span { color: #72c6f7; }
-        .container { max-width: 1000px; margin: 30px auto; padding: 20px; background: #ffffff; border-radius: 16px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.08); }
+        
+        .container { max-width: 1000px; margin: 30px auto; padding: 20px; background: rgba(255, 255, 255, 0.95); border-radius: 16px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15); }
+        
         .btn { display: inline-block; padding: 10px 24px; margin: 4px; border: none; border-radius: 50px; font-weight: 600; color: white; text-align: center; cursor: pointer; transition: all 0.3s ease; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         .btn:hover { transform: translateY(-3px); box-shadow: 0 8px 15px rgba(0,0,0,0.2); }
         .btn-primary { background: linear-gradient(135deg, #007bff, #0056b3); }
@@ -176,9 +200,16 @@ LAYOUT_BASE = """
         .adm-field label { display: block; margin-bottom: 4px; }
         .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; padding-top: 15px; border-top: 2px solid #eee; }
         
-        /* Estilo para el diálogo de cambio de contraseña */
-        .pass-dialog { max-width: 400px; margin: 20px auto; background: #f8f9fa; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); border: 1px solid #ddd; }
-        .pass-dialog h3 { color: #0d2b45; margin-top: 0; text-align: center; }
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
+        .modal-box { background: white; padding: 25px; border-radius: 16px; max-width: 500px; width: 90%; box-shadow: 0 10px 30px rgba(0,0,0,0.3); position: relative; }
+        .modal-box h3 { color: #0d2b45; margin-top: 0; text-align: center; }
+        .close-modal { position: absolute; top: 10px; right: 15px; font-size: 24px; cursor: pointer; color: #666; }
+        .close-modal:hover { color: #000; }
+        
+        .triaje-view-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; }
+        .triaje-item { background: #fcfcfc; border: 1px solid #eee; border-radius: 8px; padding: 10px; text-align: center; }
+        .triaje-item .label { font-weight: bold; font-size: 12px; color: #666; display: block; }
+        .triaje-item .value { font-size: 18px; font-weight: bold; color: #0d2b45; display: block; margin-top: 5px; }
     </style>
 </head>
 <body>
@@ -186,9 +217,9 @@ LAYOUT_BASE = """
         <div class="logo">🧪 <span>SISGALENO</span>2026</div>
         <div>
             {% if session.get('usuario') %}
-                <span>👤 {{ session['usuario'] }}</span>
+                <span>👤 {{ session['usuario'] }} | Rol: {{ session['rol'] }}</span>
                 <a href="{{ url_for('dashboard') }}">Inicio</a>
-                {% if session['rol'] in ['administrador', 'medico', 'laboratorista'] %}
+                {% if session['rol'] in ['administrador', 'medico', 'laboratorista', 'enfermera'] %}
                     <a href="{{ url_for('pacientes') }}">Pacientes</a>
                 {% endif %}
                 {% if session['rol'] in ['administrador', 'laboratorista'] %}
@@ -199,7 +230,6 @@ LAYOUT_BASE = """
                     <a href="{{ url_for('inventario') }}">📦 Inventario</a>
                     <a href="{{ url_for('catalogo_examenes') }}">📋 Catálogo</a>
                 {% endif %}
-                <!-- NUEVO BOTÓN: CAMBIAR CONTRASEÑA -->
                 <a href="{{ url_for('cambiar_contrasena') }}" class="btn btn-warning" style="padding: 5px 15px; margin: 0 5px;">🔑 Cambiar Contraseña</a>
                 <a href="{{ url_for('logout') }}" class="btn btn-danger" style="padding: 5px 15px;">Salir</a>
             {% endif %}
@@ -259,6 +289,16 @@ def calcular_total_atencion(id_atencion):
     return total if total else 0.0
 
 # ==========================================
+# LÓGICA PARA TRIAJE
+# ==========================================
+def obtener_triaje(id_atencion):
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("SELECT * FROM triaje WHERE id_atencion = ?", (id_atencion,))
+    datos = cursor.fetchone()
+    conn.close()
+    return datos
+
+# ==========================================
 # RUTAS PRINCIPALES
 # ==========================================
 @app.route('/')
@@ -289,7 +329,7 @@ def logout():
 @app.route('/dashboard')
 def dashboard():
     if 'usuario' not in session: return redirect(url_for('login'))
-    contenido_dashboard = """<div class="dashboard-banner"><div><h2>🔬 Bienvenido, {{ session['usuario'] }}</h2><p>Laboratorio Clínico SISGALENO2026</p></div><div style="font-size: 30px;">🧪💉</div></div><div class="menu-grid">{% if session['rol'] in ['administrador', 'medico', 'laboratorista'] %}<a href="{{ url_for('pacientes') }}" class="menu-item">👤 Pacientes</a>{% endif %}{% if session['rol'] in ['administrador', 'laboratorista'] %}<a href="{{ url_for('laboratorio') }}" class="menu-item">🧪 Laboratorio</a><a href="{{ url_for('resultados') }}" class="menu-item">📊 Resultados</a>{% endif %}{% if session['rol'] == 'administrador' %}<a href="{{ url_for('inventario') }}" class="menu-item">📦 Inventario</a><a href="{{ url_for('catalogo_examenes') }}" class="menu-item">📋 Catálogo</a>{% endif %}</div>"""
+    contenido_dashboard = """<div class="dashboard-banner"><div><h2>🔬 Bienvenido, {{ session['usuario'] }}</h2><p>Laboratorio Clínico SISGALENO2026</p></div><div style="font-size: 30px;">🧪💉</div></div><div class="menu-grid">{% if session['rol'] in ['administrador', 'medico', 'laboratorista', 'enfermera'] %}<a href="{{ url_for('pacientes') }}" class="menu-item">👤 Pacientes</a>{% endif %}{% if session['rol'] in ['administrador', 'laboratorista'] %}<a href="{{ url_for('laboratorio') }}" class="menu-item">🧪 Laboratorio</a><a href="{{ url_for('resultados') }}" class="menu-item">📊 Resultados</a>{% endif %}{% if session['rol'] == 'administrador' %}<a href="{{ url_for('inventario') }}" class="menu-item">📦 Inventario</a><a href="{{ url_for('catalogo_examenes') }}" class="menu-item">📋 Catálogo</a>{% endif %}</div>"""
     html_dashboard = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_dashboard)
     return render_template_string(html_dashboard)
 
@@ -346,7 +386,7 @@ def editar_paciente(id):
     return render_template_string(LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_editar), paciente=paciente, mensaje="", tipo_mensaje="")
 
 # ==========================================
-# MÓDULO DE ATENCIÓN Y ADMISIÓN (F3 / F4)
+# MÓDULO DE ATENCIÓN (F3 / F4 / F5)
 # ==========================================
 def obtener_siguiente_boleta():
     conn = get_db_connection(); cursor = conn.cursor()
@@ -394,6 +434,7 @@ def gestion_admision(id_atencion):
     examenes = obtener_examenes_por_atencion(id_atencion)
     total = calcular_total_atencion(id_atencion)
     catalogo = obtener_examenes_catalogo()
+    triaje = obtener_triaje(id_atencion)  # <-- Obtener datos de triaje
     
     mensaje = ""; tipo_mensaje = ""
     
@@ -449,6 +490,38 @@ def gestion_admision(id_atencion):
                     return redirect(url_for('nueva_atencion', id_paciente=res[0]))
                 else:
                     mensaje = "Paciente no encontrado con ese DNI."; tipo_mensaje = "alert-danger"
+        elif accion == 'guardar_triaje':
+            # Guardar Triaje (Solo enfermeras o admin)
+            if session['rol'] not in ['enfermera', 'administrador']:
+                mensaje = "No tienes permisos para realizar triaje."
+                tipo_mensaje = "alert-danger"
+            else:
+                try:
+                    presion_sis = int(request.form.get('presion_sis', 0))
+                    presion_dias = int(request.form.get('presion_dias', 0))
+                    fc = int(request.form.get('fc', 0))
+                    fr = int(request.form.get('fr', 0))
+                    temp = float(request.form.get('temperatura', 0.0))
+                    sat = int(request.form.get('saturacion', 0))
+                    peso = float(request.form.get('peso', 0.0))
+                    talla = float(request.form.get('talla', 0.0))
+                    imc = round(peso / (talla * talla), 2) if talla > 0 else 0.0
+                    glasgow = int(request.form.get('glasgow', 0))
+                    dolor = int(request.form.get('dolor', 0))
+                    obs = request.form.get('observaciones', '')
+                    fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    enfermera = session['usuario']
+                    
+                    conn = get_db_connection(); cursor = conn.cursor()
+                    # Insert or Replace para asegurar que solo haya un triaje por atención
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO triaje (id_atencion, fecha_hora, enfermera, presion_sistolica, presion_diastolica, frecuencia_cardiaca, frecuencia_respiratoria, temperatura, saturacion_oxigeno, peso, talla, imc, glasgow, dolor, observaciones)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (id_atencion, fecha_hora, enfermera, presion_sis, presion_dias, fc, fr, temp, sat, peso, talla, imc, glasgow, dolor, obs))
+                    conn.commit(); conn.close()
+                    mensaje = "Triaje guardado exitosamente."; tipo_mensaje = "alert-success"
+                except Exception as e:
+                    mensaje = f"Error al guardar triaje: {str(e)}"; tipo_mensaje = "alert-danger"
 
     contenido_admision = """
     <script>
@@ -459,13 +532,30 @@ def gestion_admision(id_atencion):
             document.getElementById("tab_"+nombre).classList.add("active");
             document.getElementById("btn_"+nombre).classList.add("active");
         }
+
+        function calcularIMC() {
+            var peso = parseFloat(document.getElementById('peso').value);
+            var talla = parseFloat(document.getElementById('talla').value);
+            var imcInput = document.getElementById('imc');
+            if(peso > 0 && talla > 0) {
+                var imc = peso / (talla * talla);
+                imcInput.value = imc.toFixed(2);
+            } else {
+                imcInput.value = '';
+            }
+        }
     </script>
 
     <div class="tabs">
         <div class="tab-btn active" id="btn_f3" onclick="abrirPestana('f3')">F3 - ATENCIÓN</div>
         <div class="tab-btn" id="btn_f4" onclick="abrirPestana('f4')">F4 - EXÁMENES</div>
+        <!-- La pestaña F5 es visible para enfermeras, médicos y admin -->
+        {% if session['rol'] in ['enfermera', 'medico', 'administrador'] %}
+            <div class="tab-btn" id="btn_f5" onclick="abrirPestana('f5')">F5 - TRIAJE</div>
+        {% endif %}
     </div>
 
+    <!-- PESTAÑA F3: ATENCIÓN -->
     <div id="tab_f3" class="tab-content active">
         {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
         
@@ -518,6 +608,7 @@ def gestion_admision(id_atencion):
         </div>
     </div>
 
+    <!-- PESTAÑA F4: EXÁMENES -->
     <div id="tab_f4" class="tab-content">
         <h3 style="color: #0d2b45; font-size: 18px; margin-top:0;">F4 - EXÁMENES SOLICITADOS</h3>
         <div style="overflow-x: auto;">
@@ -569,9 +660,75 @@ def gestion_admision(id_atencion):
             <a href="{{ url_for('laboratorio') }}" class="btn btn-secondary" style="background:#555; color:white; text-decoration:none;">🚪 Salir</a>
         </div>
     </div>
+
+    <!-- PESTAÑA F5: TRIAJE (Nurse / Medico / Admin) -->
+    <div id="tab_f5" class="tab-content">
+        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
+        
+        <h3 style="color: #0d2b45; font-size: 18px; margin-top:0;">F5 - REGISTRO DE TRIAJE</h3>
+        
+        {% if session['rol'] in ['enfermera', 'administrador'] %}
+            <!-- MODO FORMULARIO: PARA LA ENFERMERA / ADMIN -->
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 12px; border: 1px solid #ddd;">
+                <h4 style="color: #0d2b45; margin-top:0;">Ingreso de Signos Vitales</h4>
+                <form method="POST">
+                    <input type="hidden" name="accion" value="guardar_triaje">
+                    <div class="adm-form-grid">
+                        <div class="adm-field"><label>Presión Arterial (Sistólica)</label><input type="number" name="presion_sis" placeholder="120" required></div>
+                        <div class="adm-field"><label>Presión Arterial (Diastólica)</label><input type="number" name="presion_dias" placeholder="80" required></div>
+                        <div class="adm-field"><label>Frecuencia Cardíaca</label><input type="number" name="fc" placeholder="70" required></div>
+                        <div class="adm-field"><label>Frecuencia Respiratoria</label><input type="number" name="fr" placeholder="16" required></div>
+                        <div class="adm-field"><label>Temperatura (°C)</label><input type="number" step="0.1" name="temperatura" placeholder="36.5" required></div>
+                        <div class="adm-field"><label>Saturación de Oxígeno (%)</label><input type="number" name="saturacion" placeholder="98" required></div>
+                        <div class="adm-field"><label>Peso (kg)</label><input type="number" step="0.1" id="peso" name="peso" oninput="calcularIMC()" placeholder="70" required></div>
+                        <div class="adm-field"><label>Talla (m)</label><input type="number" step="0.01" id="talla" name="talla" oninput="calcularIMC()" placeholder="1.75" required></div>
+                        <div class="adm-field"><label>IMC (Calculado)</label><input type="text" id="imc" name="imc" readonly style="background:#d1d1d1;"></div>
+                        <div class="adm-field"><label>Escala de Glasgow</label><input type="number" name="glasgow" placeholder="15" required></div>
+                        <div class="adm-field"><label>Dolor (Escala 0-10)</label><input type="number" name="dolor" placeholder="0" required></div>
+                    </div>
+                    <div class="adm-field"><label>Observaciones</label><textarea name="observaciones" rows="3" placeholder="Notas de enfermería..."></textarea></div>
+                    
+                    <div class="toolbar">
+                        <button type="submit" class="btn btn-success">💾 Grabar Triaje</button>
+                        <button type="reset" class="btn btn-danger">✖ Limpiar</button>
+                    </div>
+                </form>
+            </div>
+        {% endif %}
+
+        <!-- MODO VISUALIZACIÓN: PARA EL MÉDICO Y ADMIN -->
+        <div style="background: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #ddd; margin-top: 15px;">
+            <h4 style="color: #0d2b45; margin-top:0;">📋 Vista de Enfermería</h4>
+            {% if triaje %}
+                <div style="display: flex; justify-content: flex-end; font-size: 12px; color: #666; margin-bottom: 10px;">
+                    Registrado por: <b>{{ triaje[2] }}</b> a las {{ triaje[1] }}
+                </div>
+                <div class="triaje-view-grid">
+                    <div class="triaje-item"><span class="label">Presión Arterial</span><span class="value">{{ triaje[3] }}/{{ triaje[4] }} mmHg</span></div>
+                    <div class="triaje-item"><span class="label">Frecuencia Cardíaca</span><span class="value">{{ triaje[5] }} lpm</span></div>
+                    <div class="triaje-item"><span class="label">Frecuencia Respiratoria</span><span class="value">{{ triaje[6] }} rpm</span></div>
+                    <div class="triaje-item"><span class="label">Temperatura</span><span class="value">{{ triaje[7] }} °C</span></div>
+                    <div class="triaje-item"><span class="label">Sat. O₂</span><span class="value">{{ triaje[8] }} %</span></div>
+                    <div class="triaje-item"><span class="label">Peso / Talla</span><span class="value">{{ triaje[9] }} kg / {{ triaje[10] }} m</span></div>
+                    <div class="triaje-item"><span class="label">IMC</span><span class="value">{{ triaje[11] }}</span></div>
+                    <div class="triaje-item"><span class="label">Glasgow</span><span class="value">{{ triaje[12] }} / 15</span></div>
+                    <div class="triaje-item"><span class="label">Dolor (EVA)</span><span class="value">{{ triaje[13] }} / 10</span></div>
+                </div>
+                <div style="margin-top: 15px; background: #f9f9f9; padding: 10px; border-radius: 8px;">
+                    <b>Observaciones:</b> <span style="font-style: italic;">{{ triaje[14] if triaje[14] else 'Sin observaciones.' }}</span>
+                </div>
+            {% else %}
+                <div style="text-align: center; padding: 40px; color: #666;">
+                    <span style="font-size: 40px;">🩺</span><br>
+                    <b>No se ha registrado el triaje.</b><br>
+                    <span style="font-size: 13px;">Espere a que la enfermera registre los signos vitales o realice el ingreso.</span>
+                </div>
+            {% endif %}
+        </div>
+    </div>
     """
     html_admision = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_admision)
-    return render_template_string(html_admision, atencion=atencion, examenes=examenes, total=total, catalogo=catalogo, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
+    return render_template_string(html_admision, atencion=atencion, examenes=examenes, total=total, catalogo=catalogo, triaje=triaje, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
 
 # ==========================================
 # NUEVA PANTALLA DE RESULTADOS Y CAMBIO DE CONTRASEÑA
@@ -696,7 +853,7 @@ def ingresar_resultados(id_orden):
     return render_template_string(html_ingreso, orden=orden, parametros=parametros, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
 
 # ==========================================
-# NUEVA RUTA PARA CAMBIO DE CONTRASEÑA
+# RUTA PARA CAMBIO DE CONTRASEÑA
 # ==========================================
 @app.route('/cambiar_contrasena', methods=['GET', 'POST'])
 def cambiar_contrasena():
@@ -712,7 +869,6 @@ def cambiar_contrasena():
         pass_nuevo = request.form.get('pass_nuevo', '')
         pass_confirm = request.form.get('pass_confirm', '')
         
-        # Validaciones
         if not pass_anterior or not pass_nuevo or not pass_confirm:
             mensaje = "Todos los campos son obligatorios."
             tipo_mensaje = "alert-danger"
@@ -726,20 +882,17 @@ def cambiar_contrasena():
             try:
                 conn = get_db_connection()
                 cursor = conn.cursor()
-                # Verificar que la contraseña anterior sea correcta
                 cursor.execute("SELECT id FROM usuarios WHERE usuario=? AND password=?", (usuario_actual, pass_anterior))
                 user = cursor.fetchone()
                 if not user:
                     mensaje = "La contraseña anterior es incorrecta."
                     tipo_mensaje = "alert-danger"
                 else:
-                    # Actualizar la contraseña
                     cursor.execute("UPDATE usuarios SET password=? WHERE usuario=?", (pass_nuevo, usuario_actual))
                     conn.commit()
                     mensaje = "¡Contraseña actualizada exitosamente! Por favor, vuelva a iniciar sesión."
                     tipo_mensaje = "alert-success"
                     conn.close()
-                    # Forzar cierre de sesión por seguridad
                     session.clear()
                     return redirect(url_for('login'))
                 conn.close()
@@ -783,9 +936,116 @@ def laboratorio():
     dni = request.args.get('dni', ''); fecha_desde = request.args.get('fecha_desde', ''); fecha_hasta = request.args.get('fecha_hasta', '')
     atenciones = buscar_atenciones_web(dni, fecha_desde, fecha_hasta)
     
-    contenido_lab = """<h2 style="color: #0d2b45;">Órdenes de Laboratorio</h2><div style="background: #f8f9fa; padding: 15px; border-radius: 12px; margin-bottom: 20px;"><form method="GET" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: end;"><div><label>DNI</label><input type="text" name="dni" value="{{ dni }}" style="width: 150px; margin:0;"></div><div><label>Desde</label><input type="date" name="fecha_desde" value="{{ fecha_desde }}" style="width: 150px; margin:0;"></div><div><label>Hasta</label><input type="date" name="fecha_hasta" value="{{ fecha_hasta }}" style="width: 150px; margin:0;"></div><div><button type="submit" class="btn btn-primary">🔍 Buscar</button></div><div><a href="{{ url_for('laboratorio') }}" class="btn btn-warning">Limpiar</a></div></form></div><div style="overflow-x: auto;"><table><thead><tr><th>ID</th><th>Paciente</th><th>Exámenes</th><th>Fecha</th><th>Progreso</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>{% for a in atenciones %}{% set completados = a[5] %}{% set total = a[6] %}{% set clase_fila = '' %}{% set clase_badge = '' %}{% set texto_estado = '' %}{% if completados == total and total > 0 %}{% set clase_fila = 'estado-verde' %}{% set clase_badge = 'badge-verde' %}{% set texto_estado = 'Completado' %}{% elif completados > 0 %}{% set clase_fila = 'estado-rojo' %}{% set clase_badge = 'badge-rojo' %}{% set texto_estado = 'Incompleto' %}{% else %}{% set clase_fila = 'estado-amarillo' %}{% set clase_badge = 'badge-amarillo' %}{% set texto_estado = 'Pendiente' %}{% endif %}<tr class="{{ clase_fila }}"><td><b>#{{ a[0] }}</b></td><td><b>{{ a[1] }} {{ a[2] }}</b></td><td>{{ a[3] }}</td><td>{{ a[4] }}</td><td>{{ completados }}/{{ total }}</td><td><span class="badge {{ clase_badge }}">{{ texto_estado }}</span></td><td><a href="{{ url_for('gestion_admision', id_atencion=a[0]) }}" class="btn btn-success" style="padding: 6px 16px; font-size: 14px;">📝 Ingresar</a></td></tr>{% else %}<tr><td colspan="7" style="text-align:center; padding: 30px;">🔬 No se encontraron atenciones registradas.</td></tr>{% endfor %}</tbody></table></div>"""
+    contenido_lab = """
+    <h2 style="color: #0d2b45;">Órdenes de Laboratorio</h2>
+    <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; margin-bottom: 20px;">
+        <form method="GET" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: end;">
+            <div><label>DNI</label><input type="text" name="dni" value="{{ dni }}" style="width: 150px; margin:0;"></div>
+            <div><label>Desde</label><input type="date" name="fecha_desde" value="{{ fecha_desde }}" style="width: 150px; margin:0;"></div>
+            <div><label>Hasta</label><input type="date" name="fecha_hasta" value="{{ fecha_hasta }}" style="width: 150px; margin:0;"></div>
+            <div><button type="submit" class="btn btn-primary">🔍 Buscar</button></div>
+            <div><a href="{{ url_for('laboratorio') }}" class="btn btn-warning">Limpiar</a></div>
+            <div><button type="button" onclick="abrirModalIngreso()" class="btn btn-success" style="background: #17a2b8;">➕ Ingreso por DNI</button></div>
+        </form>
+    </div>
+    
+    <div style="overflow-x: auto;">
+        <table>
+            <thead><tr><th>ID</th><th>Paciente</th><th>Exámenes</th><th>Fecha</th><th>Progreso</th><th>Estado</th><th>Acciones</th></tr></thead>
+            <tbody>
+                {% for a in atenciones %}
+                {% set completados = a[5] %}
+                {% set total = a[6] %}
+                {% set clase_fila = '' %}{% set clase_badge = '' %}{% set texto_estado = '' %}
+                {% if completados == total and total > 0 %}
+                    {% set clase_fila = 'estado-verde' %}{% set clase_badge = 'badge-verde' %}{% set texto_estado = 'Completado' %}
+                {% elif completados > 0 %}
+                    {% set clase_fila = 'estado-rojo' %}{% set clase_badge = 'badge-rojo' %}{% set texto_estado = 'Incompleto' %}
+                {% else %}
+                    {% set clase_fila = 'estado-amarillo' %}{% set clase_badge = 'badge-amarillo' %}{% set texto_estado = 'Pendiente' %}
+                {% endif %}
+                <tr class="{{ clase_fila }}"><td><b>#{{ a[0] }}</b></td><td><b>{{ a[1] }} {{ a[2] }}</b></td><td>{{ a[3] }}</td><td>{{ a[4] }}</td><td>{{ completados }}/{{ total }}</td><td><span class="badge {{ clase_badge }}">{{ texto_estado }}</span></td><td><a href="{{ url_for('gestion_admision', id_atencion=a[0]) }}" class="btn btn-success" style="padding: 6px 16px; font-size: 14px;">📝 Ingresar</a></td></tr>
+                {% else %}
+                <tr><td colspan="7" style="text-align:center; padding: 30px;">🔬 No se encontraron atenciones registradas.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="modal-overlay" id="modalIngreso">
+        <div class="modal-box">
+            <span class="close-modal" onclick="cerrarModalIngreso()">&times;</span>
+            <h3>➕ Ingreso de Paciente por DNI</h3>
+            <form method="POST" action="{{ url_for('ingreso_rapido_paciente') }}">
+                <div class="adm-field">
+                    <label>DNI del Paciente *</label>
+                    <input type="text" name="dni" placeholder="Ej: 12345678" required>
+                </div>
+                <div style="margin: 10px 0; text-align: center; color: #666;">Si el paciente no existe, ingrese Nombre y Apellido para registrarlo.</div>
+                <div class="adm-form-grid">
+                    <div class="adm-field">
+                        <label>Nombre</label>
+                        <input type="text" name="nombre" placeholder="Nombre (Nuevo)">
+                    </div>
+                    <div class="adm-field">
+                        <label>Apellido</label>
+                        <input type="text" name="apellido" placeholder="Apellido (Nuevo)">
+                    </div>
+                </div>
+                <div class="toolbar" style="justify-content: center; border-top: none; padding-top: 10px;">
+                    <button type="submit" class="btn btn-success">🔍 Buscar / Crear Atención</button>
+                    <button type="button" class="btn btn-danger" onclick="cerrarModalIngreso()">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        function abrirModalIngreso() {
+            document.getElementById('modalIngreso').style.display = 'flex';
+        }
+        function cerrarModalIngreso() {
+            document.getElementById('modalIngreso').style.display = 'none';
+        }
+        document.getElementById('modalIngreso').addEventListener('click', function(e) {
+            if (e.target === this) {
+                cerrarModalIngreso();
+            }
+        });
+    </script>
+    """
     html_lab = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_lab)
     return render_template_string(html_lab, atenciones=atenciones, dni=dni, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta)
+
+@app.route('/laboratorio/ingreso_rapido', methods=['POST'])
+def ingreso_rapido_paciente():
+    if 'usuario' not in session: return redirect(url_for('login'))
+    
+    dni = request.form.get('dni', '').strip()
+    nombre = request.form.get('nombre', '').strip()
+    apellido = request.form.get('apellido', '').strip()
+    
+    if not dni:
+        return redirect(url_for('laboratorio'))
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, nombre, apellido FROM pacientes WHERE dni = ?", (dni,))
+    res = cursor.fetchone()
+    
+    if res:
+        id_paciente = res[0]
+        conn.close()
+        return redirect(url_for('nueva_atencion', id_paciente=id_paciente))
+    else:
+        if not nombre or not apellido:
+            conn.close()
+            return redirect(url_for('pacientes'))
+        cursor.execute("INSERT INTO pacientes (dni, nombre, apellido) VALUES (?, ?, ?)", (dni, nombre, apellido))
+        id_paciente = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return redirect(url_for('nueva_atencion', id_paciente=id_paciente))
 
 # ==========================================
 # INVENTARIO Y CATÁLOGO
