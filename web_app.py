@@ -8,13 +8,10 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 import io
 
-# Cargar variables de entorno (para la base de datos de la nube)
 load_dotenv()
-
 app = Flask(__name__)
 app.secret_key = 'clave_super_secreta_sisgaleno2026'
 
-# Detectar si usamos la base de datos de la nube (PostgreSQL) o la local (SQLite)
 DATABASE_URL = os.environ.get('DATABASE_URL')
 IS_POSTGRES = DATABASE_URL is not None and DATABASE_URL.startswith('postgresql')
 
@@ -25,75 +22,38 @@ def get_db_connection():
         return sqlite3.connect('sisgaleno2026.db')
 
 # ==========================================
-# FUNCIONES DE BASE DE DATOS (Compatibles con PostgreSQL y SQLite)
+# FUNCIONES DE BASE DE DATOS
 # ==========================================
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
-    
-    # Definir sintaxis según el motor de base de datos
-    if IS_POSTGRES:
+    if IS_POSTGRES: 
         auto_inc = "SERIAL"
         conflict = "ON CONFLICT (usuario) DO NOTHING"
-    else:
+    else: 
         auto_inc = "INTEGER PRIMARY KEY AUTOINCREMENT"
         conflict = ""
 
-    cursor.execute(f'''CREATE TABLE IF NOT EXISTS usuarios (
-        id {auto_inc},
-        usuario TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        rol TEXT NOT NULL
-    )''')
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS usuarios ( id {auto_inc}, usuario TEXT UNIQUE NOT NULL, password TEXT NOT NULL, rol TEXT NOT NULL )''')
     cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('admin', 'admin', 'administrador') {conflict}")
     cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('doctor', 'doctor', 'medico') {conflict}")
     cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('lab', 'lab', 'laboratorista') {conflict}")
 
-    cursor.execute(f'''CREATE TABLE IF NOT EXISTS pacientes (
-        id {auto_inc},
-        dni TEXT UNIQUE NOT NULL,
-        nombre TEXT NOT NULL,
-        apellido TEXT NOT NULL,
-        fecha_nacimiento TEXT,
-        telefono TEXT,
-        direccion TEXT
-    )''')
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS pacientes ( id {auto_inc}, dni TEXT UNIQUE NOT NULL, nombre TEXT NOT NULL, apellido TEXT NOT NULL, fecha_nacimiento TEXT, telefono TEXT, direccion TEXT )''')
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS examenes_catalogo ( id {auto_inc}, nombre_examen TEXT NOT NULL )''')
     
-    cursor.execute(f'''CREATE TABLE IF NOT EXISTS examenes_catalogo (
-        id {auto_inc},
-        nombre_examen TEXT NOT NULL
-    )''')
-    if IS_POSTGRES:
-        cursor.execute("INSERT INTO examenes_catalogo (id, nombre_examen) VALUES (1, 'Hemograma Completo') ON CONFLICT (id) DO NOTHING")
-        cursor.execute("INSERT INTO examenes_catalogo (id, nombre_examen) VALUES (2, 'Glucosa en Ayunas') ON CONFLICT (id) DO NOTHING")
-        cursor.execute("INSERT INTO examenes_catalogo (id, nombre_examen) VALUES (3, 'Perfil Lipídico') ON CONFLICT (id) DO NOTHING")
-        cursor.execute("INSERT INTO examenes_catalogo (id, nombre_examen) VALUES (4, 'Orina Completa') ON CONFLICT (id) DO NOTHING")
-        cursor.execute("INSERT INTO examenes_catalogo (id, nombre_examen) VALUES (5, 'Colesterol Total') ON CONFLICT (id) DO NOTHING")
-    else:
-        cursor.execute("INSERT OR IGNORE INTO examenes_catalogo (id, nombre_examen) VALUES (1, 'Hemograma Completo')")
-        cursor.execute("INSERT OR IGNORE INTO examenes_catalogo (id, nombre_examen) VALUES (2, 'Glucosa en Ayunas')")
-        cursor.execute("INSERT OR IGNORE INTO examenes_catalogo (id, nombre_examen) VALUES (3, 'Perfil Lipídico')")
-        cursor.execute("INSERT OR IGNORE INTO examenes_catalogo (id, nombre_examen) VALUES (4, 'Orina Completa')")
-        cursor.execute("INSERT OR IGNORE INTO examenes_catalogo (id, nombre_examen) VALUES (5, 'Colesterol Total')")
+    # Insertar exámenes por defecto
+    for i, nombre in enumerate(['Hemograma Completo', 'Glucosa en Ayunas', 'Perfil Lipídico', 'Orina Completa', 'Colesterol Total'], 1):
+        if IS_POSTGRES: 
+            cursor.execute(f"INSERT INTO examenes_catalogo (id, nombre_examen) VALUES ({i}, '{nombre}') ON CONFLICT (id) DO NOTHING")
+        else: 
+            cursor.execute(f"INSERT OR IGNORE INTO examenes_catalogo (id, nombre_examen) VALUES ({i}, '{nombre}')")
 
-    cursor.execute(f'''CREATE TABLE IF NOT EXISTS atenciones (
-        id {auto_inc},
-        id_paciente INTEGER,
-        fecha_atencion TEXT,
-        FOREIGN KEY(id_paciente) REFERENCES pacientes(id)
-    )''')
-    cursor.execute(f'''CREATE TABLE IF NOT EXISTS ordenes_laboratorio (
-        id {auto_inc},
-        id_paciente INTEGER,
-        id_examen INTEGER,
-        id_atencion INTEGER,
-        fecha_emision TEXT,
-        estado TEXT,
-        resultado TEXT,
-        FOREIGN KEY(id_paciente) REFERENCES pacientes(id),
-        FOREIGN KEY(id_examen) REFERENCES examenes_catalogo(id),
-        FOREIGN KEY(id_atencion) REFERENCES atenciones(id)
-    )''')
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS atenciones ( id {auto_inc}, id_paciente INTEGER, fecha_atencion TEXT, FOREIGN KEY(id_paciente) REFERENCES pacientes(id) )''')
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS ordenes_laboratorio ( id {auto_inc}, id_paciente INTEGER, id_examen INTEGER, id_atencion INTEGER, fecha_emision TEXT, estado TEXT, resultado TEXT, FOREIGN KEY(id_paciente) REFERENCES pacientes(id), FOREIGN KEY(id_examen) REFERENCES examenes_catalogo(id), FOREIGN KEY(id_atencion) REFERENCES atenciones(id) )''')
+    
+    # Tabla de inventario
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS reactivos ( id {auto_inc}, nombre TEXT NOT NULL, cantidad REAL NOT NULL, unidad TEXT, fecha_caducidad TEXT, proveedor TEXT )''')
     
     conn.commit()
     conn.close()
@@ -101,7 +61,7 @@ def init_db():
 init_db()
 
 # ==========================================
-# DISEÑO Y ESTILOS VISUALES
+# DISEÑO Y ESTILOS VISUALES (CON ATRIBUCIÓN)
 # ==========================================
 LAYOUT_BASE = """
 <!DOCTYPE html>
@@ -140,27 +100,17 @@ LAYOUT_BASE = """
         .badge-rojo { background: #dc3545; color: white; }
         .badge-amarillo { background: #ffc107; color: #212529; }
 
-        .dashboard-banner {
-            background-image: url('/static/fondo_lab.jpg');
-            background-size: cover;
-            background-position: center;
-            margin: -20px -20px 20px -20px;
-            padding: 40px 30px;
-            border-radius: 16px 16px 0 0;
-            color: white;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
-        }
-
+        .dashboard-banner { background-image: url('/static/fondo_lab.jpg'); background-size: cover; background-position: center; margin: -20px -20px 20px -20px; padding: 40px 30px; border-radius: 16px 16px 0 0; color: white; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; text-shadow: 2px 2px 4px rgba(0,0,0,0.8); }
         .menu-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 20px; margin-top: 20px; }
         .menu-item { background: #ffffff; padding: 25px 15px; text-align: center; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); color: #333; font-weight: 600; transition: 0.3s; border: 1px solid #eee; }
         .menu-item:hover { background: #0d2b45; color: white; transform: translateY(-5px); box-shadow: 0 8px 25px rgba(13, 43, 69, 0.3); border-color: #0d2b45; }
         .alert { padding: 15px; border-radius: 10px; margin: 15px 0; border-left: 6px solid; }
         .alert-success { background: #eaf6ed; border-color: #28a745; color: #1e7e34; }
         .alert-danger { background: #fdecea; border-color: #dc3545; color: #a71d2a; }
+        
+        /* NUEVA LÍNEA DE ATRIBUCIÓN */
+        .attribution { text-align: center; font-size: 12px; color: #666; padding: 5px 0; background: #fcfcfc; border-bottom: 1px solid #eee; }
+        
         @media (max-width: 600px) { .navbar { flex-direction: column; align-items: flex-start; padding: 15px; } .navbar a { margin: 5px 0; } .dashboard-banner { padding: 20px 15px; } }
     </style>
 </head>
@@ -177,10 +127,18 @@ LAYOUT_BASE = """
                 {% if session['rol'] in ['administrador', 'laboratorista'] %}
                     <a href="{{ url_for('laboratorio') }}">Laboratorio</a>
                 {% endif %}
+                {% if session['rol'] == 'administrador' %}
+                    <a href="{{ url_for('inventario') }}">📦 Inventario</a>
+                    <a href="{{ url_for('catalogo_examenes') }}">📋 Catálogo</a>
+                {% endif %}
                 <a href="{{ url_for('logout') }}" class="btn btn-danger" style="padding: 5px 15px;">Salir</a>
             {% endif %}
         </div>
     </nav>
+    
+    <!-- LÍNEA DE ATRIBUCIÓN DEL CREADOR -->
+    <div class="attribution">Creado by Yonan T:B</div>
+    
     <div class="container">
         <!-- CONTENIDO_DINAMICO -->
     </div>
@@ -189,93 +147,44 @@ LAYOUT_BASE = """
 """
 
 # ==========================================
-# LÓGICA PARA GENERAR EL TICKET EN PDF
+# LOGICA DE PDF Y LABORATORIO
 # ==========================================
 def generar_ticket_pdf(paciente_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute("SELECT id, dni, nombre, apellido FROM pacientes WHERE id=?", (paciente_id,))
-    paciente = cursor.fetchone()
-    conn.close()
+    paciente = cursor.fetchone(); conn.close()
     if not paciente: return None
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
-    c.setFont("Helvetica-Bold", 18)
-    c.drawString(30, height - 40, "SISGALENO2026")
-    c.setFont("Helvetica", 10)
-    c.drawString(30, height - 60, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+    buffer = io.BytesIO(); c = canvas.Canvas(buffer, pagesize=A4); width, height = A4
+    c.setFont("Helvetica-Bold", 18); c.drawString(30, height - 40, "SISGALENO2026")
+    c.setFont("Helvetica", 10); c.drawString(30, height - 60, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
     c.line(30, height - 85, width - 30, height - 85)
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(30, height - 110, "TICKET DE REGISTRO DE PACIENTE")
+    c.setFont("Helvetica-Bold", 14); c.drawString(30, height - 110, "TICKET DE REGISTRO DE PACIENTE")
     c.setFont("Helvetica", 12)
-    c.drawString(30, height - 140, f"ID: {paciente[0]}")
-    c.drawString(30, height - 160, f"DNI: {paciente[1]}")
-    c.drawString(30, height - 180, f"Nombre: {paciente[2]}")
-    c.drawString(30, height - 200, f"Apellido: {paciente[3]}")
+    c.drawString(30, height - 140, f"ID: {paciente[0]}"); c.drawString(30, height - 160, f"DNI: {paciente[1]}")
+    c.drawString(30, height - 180, f"Nombre: {paciente[2]}"); c.drawString(30, height - 200, f"Apellido: {paciente[3]}")
     c.line(30, height - 220, width - 30, height - 220)
-    c.setFont("Helvetica-Oblique", 9)
-    c.drawString(30, height - 250, "Ticket generado automáticamente por SISGALENO2026.")
-    c.save()
-    buffer.seek(0)
-    return buffer
+    c.setFont("Helvetica-Oblique", 9); c.drawString(30, height - 250, "Ticket generado automáticamente por SISGALENO2026.")
+    c.save(); buffer.seek(0); return buffer
 
-# ==========================================
-# LÓGICA DE LABORATORIO
-# ==========================================
 def buscar_atenciones_web(dni, fecha_desde, fecha_hasta):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # Elegir la función de agregación correcta para SQLite o PostgreSQL
+    conn = get_db_connection(); cursor = conn.cursor()
     concat_func = "STRING_AGG" if IS_POSTGRES else "GROUP_CONCAT"
-    
-    sql = f"""
-        SELECT a.id, p.nombre, p.apellido, 
-               {concat_func}(e.nombre_examen, ', ') as examenes, 
-               a.fecha_atencion,
-               COUNT(CASE WHEN o.estado = 'Completado' THEN 1 END) as completados,
-               COUNT(*) as total_examenes
-        FROM atenciones a
-        JOIN pacientes p ON a.id_paciente = p.id
-        JOIN ordenes_laboratorio o ON o.id_atencion = a.id
-        JOIN examenes_catalogo e ON o.id_examen = e.id
-        WHERE 1=1
-    """
+    sql = f"""SELECT a.id, p.nombre, p.apellido, {concat_func}(e.nombre_examen, ', ') as examenes, a.fecha_atencion, COUNT(CASE WHEN o.estado = 'Completado' THEN 1 END) as completados, COUNT(*) as total_examenes FROM atenciones a JOIN pacientes p ON a.id_paciente = p.id JOIN ordenes_laboratorio o ON o.id_atencion = a.id JOIN examenes_catalogo e ON o.id_examen = e.id WHERE 1=1"""
     params = []
-    if dni and dni.strip() != "":
-        sql += " AND p.dni LIKE ?"
-        params.append(f'%{dni.strip()}%')
-    if fecha_desde and fecha_desde.strip() != "":
-        sql += " AND date(a.fecha_atencion) >= ?"
-        params.append(fecha_desde.strip())
-    if fecha_hasta and fecha_hasta.strip() != "":
-        sql += " AND date(a.fecha_atencion) <= ?"
-        params.append(fecha_hasta.strip())
-    if not dni and not fecha_desde and not fecha_hasta:
-        sql += " AND (SELECT count(*) FROM ordenes_laboratorio sub WHERE sub.id_atencion = a.id AND sub.estado = 'Pendiente') > 0"
-    
+    if dni and dni.strip() != "": sql += " AND p.dni LIKE ?"; params.append(f'%{dni.strip()}%')
+    if fecha_desde and fecha_desde.strip() != "": sql += " AND date(a.fecha_atencion) >= ?"; params.append(fecha_desde.strip())
+    if fecha_hasta and fecha_hasta.strip() != "": sql += " AND date(a.fecha_atencion) <= ?"; params.append(fecha_hasta.strip())
+    if not dni and not fecha_desde and not fecha_hasta: sql += " AND (SELECT count(*) FROM ordenes_laboratorio sub WHERE sub.id_atencion = a.id AND sub.estado = 'Pendiente') > 0"
     sql += " GROUP BY a.id ORDER BY a.fecha_atencion DESC"
-    cursor.execute(sql, params)
-    datos = cursor.fetchall()
-    conn.close()
-    return datos
+    cursor.execute(sql, params); datos = cursor.fetchall(); conn.close(); return datos
 
 def obtener_examenes_por_atencion(id_atencion):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT o.id, e.nombre_examen, o.estado, o.resultado
-        FROM ordenes_laboratorio o
-        JOIN examenes_catalogo e ON o.id_examen = e.id
-        WHERE o.id_atencion = ?
-    """, (id_atencion,))
-    examenes = cursor.fetchall()
-    conn.close()
-    return examenes
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("SELECT o.id, e.nombre_examen, o.estado, o.resultado FROM ordenes_laboratorio o JOIN examenes_catalogo e ON o.id_examen = e.id WHERE o.id_atencion = ?", (id_atencion,))
+    examenes = cursor.fetchall(); conn.close(); return examenes
 
 # ==========================================
-# RUTAS DE LA WEB
+# RUTAS (LOGIN, DASHBOARD, PACIENTES)
 # ==========================================
 @app.route('/')
 def index():
@@ -291,16 +200,10 @@ def login():
         cursor.execute("SELECT rol FROM usuarios WHERE usuario=? AND password=?", (user, pwd))
         data = cursor.fetchone(); conn.close()
         if data:
-            session['usuario'] = user; session['rol'] = data[0]
-            return redirect(url_for('dashboard'))
+            session['usuario'] = user; session['rol'] = data[0]; return redirect(url_for('dashboard'))
         else:
             mensaje = "Credenciales incorrectas."; tipo_mensaje = "alert-danger"
-    
-    contenido_login = """
-    <h2 style="text-align: center; color: #0d2b45;">Inicio de Sesión</h2>
-    {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
-    <form method="POST"><label>Usuario</label><input type="text" name="usuario" required><label>Contraseña</label><input type="password" name="password" required><button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 10px;">Acceder</button></form>
-    """
+    contenido_login = """<h2 style="text-align: center; color: #0d2b45;">Inicio de Sesión</h2>{% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}<form method="POST"><label>Usuario</label><input type="text" name="usuario" required><label>Contraseña</label><input type="password" name="password" required><button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 10px;">Acceder</button></form>"""
     html_login = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_login)
     return render_template_string(html_login, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
 
@@ -311,15 +214,7 @@ def logout():
 @app.route('/dashboard')
 def dashboard():
     if 'usuario' not in session: return redirect(url_for('login'))
-    
-    contenido_dashboard = """
-    <div class="dashboard-banner"><div><h2>🔬 Bienvenido, {{ session['usuario'] }}</h2><p>Laboratorio Clínico SISGALENO2026</p></div><div style="font-size: 30px;">🧪💉</div></div>
-    <div class="menu-grid">
-    {% if session['rol'] in ['administrador', 'medico', 'laboratorista'] %}<a href="{{ url_for('pacientes') }}" class="menu-item">👤 Pacientes</a>{% endif %}
-    {% if session['rol'] in ['administrador', 'laboratorista'] %}<a href="{{ url_for('laboratorio') }}" class="menu-item">🧪 Laboratorio</a>{% endif %}
-    {% if session['rol'] == 'administrador' %}<a href="#" class="menu-item">📦 Inventario</a>{% endif %}
-    </div>
-    """
+    contenido_dashboard = """<div class="dashboard-banner"><div><h2>🔬 Bienvenido, {{ session['usuario'] }}</h2><p>Laboratorio Clínico SISGALENO2026</p></div><div style="font-size: 30px;">🧪💉</div></div><div class="menu-grid">{% if session['rol'] in ['administrador', 'medico', 'laboratorista'] %}<a href="{{ url_for('pacientes') }}" class="menu-item">👤 Pacientes</a>{% endif %}{% if session['rol'] in ['administrador', 'laboratorista'] %}<a href="{{ url_for('laboratorio') }}" class="menu-item">🧪 Laboratorio</a>{% endif %}{% if session['rol'] == 'administrador' %}<a href="{{ url_for('inventario') }}" class="menu-item">📦 Inventario</a><a href="{{ url_for('catalogo_examenes') }}" class="menu-item">📋 Catálogo</a>{% endif %}</div>"""
     html_dashboard = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_dashboard)
     return render_template_string(html_dashboard)
 
@@ -329,13 +224,10 @@ def pacientes():
     mensaje = ""; tipo_mensaje = ""; nuevo_paciente_id = None
     if request.method == 'POST':
         dni = request.form['dni']; nombre = request.form['nombre']; apellido = request.form['apellido']
-        fecha_nac = request.form.get('fecha_nacimiento', '')
-        telefono = request.form.get('telefono', '')
-        direccion = request.form.get('direccion', '')
+        fecha_nac = request.form.get('fecha_nacimiento', ''); telefono = request.form.get('telefono', ''); direccion = request.form.get('direccion', '')
         try:
             conn = get_db_connection(); cursor = conn.cursor()
-            cursor.execute("INSERT INTO pacientes (dni, nombre, apellido, fecha_nacimiento, telefono, direccion) VALUES (?, ?, ?, ?, ?, ?)", 
-                           (dni, nombre, apellido, fecha_nac, telefono, direccion))
+            cursor.execute("INSERT INTO pacientes (dni, nombre, apellido, fecha_nacimiento, telefono, direccion) VALUES (?, ?, ?, ?, ?, ?)", (dni, nombre, apellido, fecha_nac, telefono, direccion))
             nuevo_paciente_id = cursor.lastrowid; conn.commit(); conn.close()
             mensaje = f"Paciente {nombre} {apellido} registrado."; tipo_mensaje = "alert-success"
         except sqlite3.IntegrityError:
@@ -344,47 +236,7 @@ def pacientes():
     cursor.execute("SELECT id, dni, nombre, apellido FROM pacientes ORDER BY id DESC")
     lista_pacientes = cursor.fetchall(); conn.close()
     
-    contenido_pacientes = """
-    <div style="display: flex; justify-content: space-between; align-items: center;"><h2 style="color: #0d2b45;">Gestión de Pacientes</h2><button onclick="toggleForm()" class="btn btn-success">+ Nuevo Paciente</button></div>
-    <div id="form_registro" style="display: none; background: #f8f9fa; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
-        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
-        <form method="POST">
-            <label>DNI</label><input type="text" name="dni" required>
-            <label>Nombre</label><input type="text" name="nombre" required>
-            <label>Apellido</label><input type="text" name="apellido" required>
-            <label>Fecha Nacimiento</label><input type="date" name="fecha_nacimiento">
-            <label>Teléfono</label><input type="text" name="telefono">
-            <label>Dirección</label><input type="text" name="direccion">
-            <button type="submit" class="btn btn-primary">Guardar Paciente</button>
-        </form>
-        {% if nuevo_paciente_id %}
-            <div style="margin-top: 15px; border-top: 1px solid #ddd; padding-top: 15px;">
-                <a href="{{ url_for('descargar_ticket', paciente_id=nuevo_paciente_id) }}" target="_blank" class="btn btn-primary">📥 Ticket PDF</a>
-                <a href="https://wa.me/?text=Hola%2C%20se%20ha%20generado%20el%20ticket%20del%20paciente%20{{ nombre }}%20{{ apellido }}%20para%20su%20atenci%C3%B3n.%20Desc%C3%A1rgalo%20aqu%C3%AD%3A%20{{ url_for('descargar_ticket', paciente_id=nuevo_paciente_id, _external=True) }}" target="_blank" class="btn btn-whatsapp">📱 Enviar por WhatsApp</a>
-            </div>
-        {% endif %}
-    </div>
-    
-    <div style="overflow-x: auto;">
-        <table>
-            <thead><tr><th>ID</th><th>DNI</th><th>Nombre</th><th>Apellido</th><th>Acciones</th></tr></thead>
-            <tbody>
-                {% for p in pacientes %}
-                <tr>
-                    <td>{{ p[0] }}</td>
-                    <td>{{ p[1] }}</td>
-                    <td>{{ p[2] }}</td>
-                    <td>{{ p[3] }}</td>
-                    <td>
-                        <a href="{{ url_for('editar_paciente', id=p[0]) }}" class="btn btn-warning" style="padding: 4px 10px; font-size: 12px;">✏️ Editar</a>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    <script>function toggleForm(){ var x = document.getElementById("form_registro"); if (x.style.display === "none") { x.style.display = "block"; } else { x.style.display = "none"; } }</script>
-    """
+    contenido_pacientes = """<div style="display: flex; justify-content: space-between; align-items: center;"><h2 style="color: #0d2b45;">Gestión de Pacientes</h2><button onclick="toggleForm()" class="btn btn-success">+ Nuevo Paciente</button></div><div id="form_registro" style="display: none; background: #f8f9fa; padding: 20px; border-radius: 12px; margin-bottom: 20px;">{% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}<form method="POST"><label>DNI</label><input type="text" name="dni" required><label>Nombre</label><input type="text" name="nombre" required><label>Apellido</label><input type="text" name="apellido" required><label>Fecha Nacimiento</label><input type="date" name="fecha_nacimiento"><label>Teléfono</label><input type="text" name="telefono"><label>Dirección</label><input type="text" name="direccion"><button type="submit" class="btn btn-primary">Guardar Paciente</button></form>{% if nuevo_paciente_id %}<div style="margin-top: 15px; border-top: 1px solid #ddd; padding-top: 15px;"><a href="{{ url_for('descargar_ticket', paciente_id=nuevo_paciente_id) }}" target="_blank" class="btn btn-primary">📥 Ticket PDF</a><a href="https://wa.me/?text=Hola%2C%20se%20ha%20generado%20el%20ticket%20del%20paciente%20{{ nombre }}%20{{ apellido }}%20para%20su%20atenci%C3%B3n.%20Desc%C3%A1rgalo%20aqu%C3%AD%3A%20{{ url_for('descargar_ticket', paciente_id=nuevo_paciente_id, _external=True) }}" target="_blank" class="btn btn-whatsapp">📱 Enviar por WhatsApp</a></div>{% endif %}</div><table><thead><tr><th>ID</th><th>DNI</th><th>Nombre</th><th>Apellido</th><th>Acciones</th></tr></thead><tbody>{% for p in pacientes %}<tr><td>{{ p[0] }}</td><td>{{ p[1] }}</td><td>{{ p[2] }}</td><td>{{ p[3] }}</td><td><a href="{{ url_for('editar_paciente', id=p[0]) }}" class="btn btn-warning" style="padding: 4px 10px; font-size: 12px;">✏️ Editar</a></td></tr>{% endfor %}</tbody></table><script>function toggleForm(){ var x = document.getElementById("form_registro"); if (x.style.display === "none") { x.style.display = "block"; } else { x.style.display = "none"; } }</script>"""
     html_pacientes = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_pacientes)
     return render_template_string(html_pacientes, pacientes=lista_pacientes, mensaje=mensaje, tipo_mensaje=tipo_mensaje, nuevo_paciente_id=nuevo_paciente_id, nombre=request.form.get('nombre', ''), apellido=request.form.get('apellido', ''))
 
@@ -398,160 +250,157 @@ def descargar_ticket(paciente_id):
 @app.route('/pacientes/editar/<int:id>', methods=['GET', 'POST'])
 def editar_paciente(id):
     if 'usuario' not in session: return redirect(url_for('login'))
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
+    conn = get_db_connection(); cursor = conn.cursor()
     if request.method == 'POST':
-        dni = request.form['dni']
-        nombre = request.form['nombre']
-        apellido = request.form['apellido']
-        fecha_nac = request.form.get('fecha_nacimiento', '')
-        telefono = request.form.get('telefono', '')
-        direccion = request.form.get('direccion', '')
-        
+        dni = request.form['dni']; nombre = request.form['nombre']; apellido = request.form['apellido']
+        fecha_nac = request.form.get('fecha_nacimiento', ''); telefono = request.form.get('telefono', ''); direccion = request.form.get('direccion', '')
         try:
-            cursor.execute("""
-                UPDATE pacientes 
-                SET dni=?, nombre=?, apellido=?, fecha_nacimiento=?, telefono=?, direccion=?
-                WHERE id=?
-            """, (dni, nombre, apellido, fecha_nac, telefono, direccion, id))
-            conn.commit()
-            conn.close()
-            return redirect(url_for('pacientes'))
+            cursor.execute("UPDATE pacientes SET dni=?, nombre=?, apellido=?, fecha_nacimiento=?, telefono=?, direccion=? WHERE id=?", (dni, nombre, apellido, fecha_nac, telefono, direccion, id))
+            conn.commit(); conn.close(); return redirect(url_for('pacientes'))
         except Exception as e:
-            conn.close()
-            mensaje = f"Error al actualizar: {str(e)}"
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM pacientes WHERE id=?", (id,))
-            paciente = cursor.fetchone()
-            conn.close()
+            conn.close(); mensaje = f"Error al actualizar: {str(e)}"
+            cursor = conn.cursor(); cursor.execute("SELECT * FROM pacientes WHERE id=?", (id,)); paciente = cursor.fetchone(); conn.close()
             return render_template_string(LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_editar), paciente=paciente, mensaje=mensaje, tipo_mensaje="alert-danger")
-    
-    cursor.execute("SELECT * FROM pacientes WHERE id=?", (id,))
-    paciente = cursor.fetchone()
-    conn.close()
-    
-    if not paciente:
-        return "Paciente no encontrado", 404
-        
-    contenido_editar = """
-    <div style="display: flex; justify-content: space-between; align-items: center;"><h2 style="color: #0d2b45;">Editar Paciente</h2><a href="{{ url_for('pacientes') }}" class="btn btn-danger">Cancelar</a></div>
-    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
-        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
-        <form method="POST">
-            <label>DNI</label><input type="text" name="dni" value="{{ paciente[1] }}" required>
-            <label>Nombre</label><input type="text" name="nombre" value="{{ paciente[2] }}" required>
-            <label>Apellido</label><input type="text" name="apellido" value="{{ paciente[3] }}" required>
-            <label>Fecha Nacimiento</label><input type="date" name="fecha_nacimiento" value="{{ paciente[4] if paciente[4] else '' }}">
-            <label>Teléfono</label><input type="text" name="telefono" value="{{ paciente[5] if paciente[5] else '' }}">
-            <label>Dirección</label><input type="text" name="direccion" value="{{ paciente[6] if paciente[6] else '' }}">
-            <button type="submit" class="btn btn-primary">Guardar Cambios</button>
-        </form>
-    </div>
-    """
+    cursor.execute("SELECT * FROM pacientes WHERE id=?", (id,)); paciente = cursor.fetchone(); conn.close()
+    if not paciente: return "Paciente no encontrado", 404
+    contenido_editar = """<div style="display: flex; justify-content: space-between; align-items: center;"><h2 style="color: #0d2b45;">Editar Paciente</h2><a href="{{ url_for('pacientes') }}" class="btn btn-danger">Cancelar</a></div><div style="background: #f8f9fa; padding: 20px; border-radius: 12px; margin-bottom: 20px;">{% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}<form method="POST"><label>DNI</label><input type="text" name="dni" value="{{ paciente[1] }}" required><label>Nombre</label><input type="text" name="nombre" value="{{ paciente[2] }}" required><label>Apellido</label><input type="text" name="apellido" value="{{ paciente[3] }}" required><label>Fecha Nacimiento</label><input type="date" name="fecha_nacimiento" value="{{ paciente[4] if paciente[4] else '' }}"><label>Teléfono</label><input type="text" name="telefono" value="{{ paciente[5] if paciente[5] else '' }}"><label>Dirección</label><input type="text" name="direccion" value="{{ paciente[6] if paciente[6] else '' }}"><button type="submit" class="btn btn-primary">Guardar Cambios</button></form></div>"""
     return render_template_string(LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_editar), paciente=paciente, mensaje="", tipo_mensaje="")
 
+# ==========================================
+# RUTAS DE LABORATORIO
+# ==========================================
 @app.route('/laboratorio', methods=['GET'])
 def laboratorio():
-    if 'usuario' not in session or session['rol'] not in ['administrador', 'laboratorista']:
-        return redirect(url_for('login'))
-    
-    dni = request.args.get('dni', '')
-    fecha_desde = request.args.get('fecha_desde', '')
-    fecha_hasta = request.args.get('fecha_hasta', '')
-    
+    if 'usuario' not in session or session['rol'] not in ['administrador', 'laboratorista']: return redirect(url_for('login'))
+    dni = request.args.get('dni', ''); fecha_desde = request.args.get('fecha_desde', ''); fecha_hasta = request.args.get('fecha_hasta', '')
     atenciones = buscar_atenciones_web(dni, fecha_desde, fecha_hasta)
-    
-    contenido_lab = """
-    <h2 style="color: #0d2b45;">Órdenes de Laboratorio</h2>
-    <div style="background: #f8f9fa; padding: 15px; border-radius: 12px; margin-bottom: 20px;">
-        <form method="GET" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: end;">
-            <div><label>DNI</label><input type="text" name="dni" value="{{ dni }}" style="width: 150px; margin:0;"></div>
-            <div><label>Desde</label><input type="date" name="fecha_desde" value="{{ fecha_desde }}" style="width: 150px; margin:0;"></div>
-            <div><label>Hasta</label><input type="date" name="fecha_hasta" value="{{ fecha_hasta }}" style="width: 150px; margin:0;"></div>
-            <div><button type="submit" class="btn btn-primary">🔍 Buscar</button></div>
-            <div><a href="{{ url_for('laboratorio') }}" class="btn btn-warning">Limpiar</a></div>
-        </form>
-    </div>
-    <div style="overflow-x: auto;">
-        <table>
-            <thead><tr><th>ID</th><th>Paciente</th><th>Exámenes</th><th>Fecha</th><th>Progreso</th><th>Estado</th><th>Acciones</th></tr></thead>
-            <tbody>
-                {% for a in atenciones %}
-                    {% set completados = a[5] %}
-                    {% set total = a[6] %}
-                    {% set clase_fila = '' %}{% set clase_badge = '' %}{% set texto_estado = '' %}
-                    {% if completados == total and total > 0 %}
-                        {% set clase_fila = 'estado-verde' %}{% set clase_badge = 'badge-verde' %}{% set texto_estado = 'Completado' %}
-                    {% elif completados > 0 %}
-                        {% set clase_fila = 'estado-rojo' %}{% set clase_badge = 'badge-rojo' %}{% set texto_estado = 'Incompleto' %}
-                    {% else %}
-                        {% set clase_fila = 'estado-amarillo' %}{% set clase_badge = 'badge-amarillo' %}{% set texto_estado = 'Pendiente' %}
-                    {% endif %}
-                    <tr class="{{ clase_fila }}"><td><b>#{{ a[0] }}</b></td><td><b>{{ a[1] }} {{ a[2] }}</b></td><td>{{ a[3] }}</td><td>{{ a[4] }}</td><td>{{ completados }}/{{ total }}</td><td><span class="badge {{ clase_badge }}">{{ texto_estado }}</span></td><td><a href="{{ url_for('procesar_atencion', id_atencion=a[0]) }}" class="btn btn-success" style="padding: 6px 16px; font-size: 14px;">📝 Ingresar</a></td></tr>
-                {% else %}
-                    <tr><td colspan="7" style="text-align:center; padding: 30px;">🔬 No se encontraron atenciones registradas.</td></tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    """
+    contenido_lab = """<h2 style="color: #0d2b45;">Órdenes de Laboratorio</h2><div style="background: #f8f9fa; padding: 15px; border-radius: 12px; margin-bottom: 20px;"><form method="GET" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: end;"><div><label>DNI</label><input type="text" name="dni" value="{{ dni }}" style="width: 150px; margin:0;"></div><div><label>Desde</label><input type="date" name="fecha_desde" value="{{ fecha_desde }}" style="width: 150px; margin:0;"></div><div><label>Hasta</label><input type="date" name="fecha_hasta" value="{{ fecha_hasta }}" style="width: 150px; margin:0;"></div><div><button type="submit" class="btn btn-primary">🔍 Buscar</button></div><div><a href="{{ url_for('laboratorio') }}" class="btn btn-warning">Limpiar</a></div></form></div><div style="overflow-x: auto;"><table><thead><tr><th>ID</th><th>Paciente</th><th>Exámenes</th><th>Fecha</th><th>Progreso</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>{% for a in atenciones %}{% set completados = a[5] %}{% set total = a[6] %}{% set clase_fila = '' %}{% set clase_badge = '' %}{% set texto_estado = '' %}{% if completados == total and total > 0 %}{% set clase_fila = 'estado-verde' %}{% set clase_badge = 'badge-verde' %}{% set texto_estado = 'Completado' %}{% elif completados > 0 %}{% set clase_fila = 'estado-rojo' %}{% set clase_badge = 'badge-rojo' %}{% set texto_estado = 'Incompleto' %}{% else %}{% set clase_fila = 'estado-amarillo' %}{% set clase_badge = 'badge-amarillo' %}{% set texto_estado = 'Pendiente' %}{% endif %}<tr class="{{ clase_fila }}"><td><b>#{{ a[0] }}</b></td><td><b>{{ a[1] }} {{ a[2] }}</b></td><td>{{ a[3] }}</td><td>{{ a[4] }}</td><td>{{ completados }}/{{ total }}</td><td><span class="badge {{ clase_badge }}">{{ texto_estado }}</span></td><td><a href="{{ url_for('procesar_atencion', id_atencion=a[0]) }}" class="btn btn-success" style="padding: 6px 16px; font-size: 14px;">📝 Ingresar</a></td></tr>{% else %}<tr><td colspan="7" style="text-align:center; padding: 30px;">🔬 No se encontraron atenciones registradas.</td></tr>{% endfor %}</tbody></table></div>"""
     html_lab = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_lab)
     return render_template_string(html_lab, atenciones=atenciones, dni=dni, fecha_desde=fecha_desde, fecha_hasta=fecha_hasta)
 
 @app.route('/laboratorio/procesar/<int:id_atencion>', methods=['GET', 'POST'])
 def procesar_atencion(id_atencion):
-    if 'usuario' not in session or session['rol'] not in ['administrador', 'laboratorista']:
-        return redirect(url_for('login'))
+    if 'usuario' not in session or session['rol'] not in ['administrador', 'laboratorista']: return redirect(url_for('login'))
     mensaje = ""; tipo_mensaje = ""
     if request.method == 'POST':
         try:
             conn = get_db_connection(); cursor = conn.cursor()
             for key, valor in request.form.items():
                 if key.startswith('resultado_'):
-                    id_orden = key.split('_')[1]
-                    resultado_texto = valor.strip()
-                    if resultado_texto:
-                        cursor.execute("UPDATE ordenes_laboratorio SET estado='Completado', resultado=? WHERE id=?", (resultado_texto, id_orden))
-            conn.commit(); conn.close()
-            mensaje = "Resultados guardados exitosamente."; tipo_mensaje = "alert-success"
-        except Exception as e:
-            mensaje = f"Error: {str(e)}"; tipo_mensaje = "alert-danger"
+                    id_orden = key.split('_')[1]; resultado_texto = valor.strip()
+                    if resultado_texto: cursor.execute("UPDATE ordenes_laboratorio SET estado='Completado', resultado=? WHERE id=?", (resultado_texto, id_orden))
+            conn.commit(); conn.close(); mensaje = "Resultados guardados exitosamente."; tipo_mensaje = "alert-success"
+        except Exception as e: mensaje = f"Error: {str(e)}"; tipo_mensaje = "alert-danger"
     conn = get_db_connection(); cursor = conn.cursor()
     cursor.execute("SELECT p.nombre, p.apellido, p.dni FROM atenciones a JOIN pacientes p ON a.id_paciente = p.id WHERE a.id = ?", (id_atencion,))
     paciente = cursor.fetchone(); examenes = obtener_examenes_por_atencion(id_atencion); conn.close()
     if not paciente: return "Atención no encontrada", 404
-    
-    contenido_procesar = """
-    <h2 style="color: #0d2b45;">Ingresar Resultados</h2>
-    <div style="background: #e9ecef; padding: 15px; border-radius: 12px; margin-bottom: 20px;">
-        <p><b>👤 Paciente:</b> {{ paciente[0] }} {{ paciente[1] }} (DNI: {{ paciente[2] }})</p>
-        <p><b>📄 Atención ID:</b> #{{ id_atencion }}</p>
-    </div>
-    {% if mensaje %}
-        <div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>
-    {% endif %}
-    <form method="POST">
-        <table><thead><tr><th>Examen</th><th>Estado</th><th>Resultado</th></tr></thead><tbody>
-            {% for e in examenes %}
-            <tr><td><b>{{ e[1] }}</b></td><td>
-                {% if e[2] == 'Completado' %}<span class="badge badge-verde">Completado</span>
-                {% else %}<span class="badge badge-amarillo">Pendiente</span>{% endif %}</td>
-                <td>{% if e[2] == 'Completado' %}<span style="font-style: italic; color: #28a745;">{{ e[3] }}</span><input type="hidden" name="resultado_{{ e[0] }}" value="{{ e[3] }}">
-                {% else %}<textarea name="resultado_{{ e[0] }}" rows="2" placeholder="Ingrese el valor..." required style="width:100%;">{{ e[3] }}</textarea>{% endif %}</td>
-            </tr>
-            {% endfor %}
-        </tbody></table>
-        <div style="margin-top: 15px;"><button type="submit" class="btn btn-success">Guardar Todos</button><a href="{{ url_for('laboratorio') }}" class="btn btn-danger">Cancelar</a></div>
-    </form>
-    """
+    contenido_procesar = """<h2 style="color: #0d2b45;">Ingresar Resultados</h2><div style="background: #e9ecef; padding: 15px; border-radius: 12px; margin-bottom: 20px;"><p><b>👤 Paciente:</b> {{ paciente[0] }} {{ paciente[1] }} (DNI: {{ paciente[2] }})</p><p><b>📄 Atención ID:</b> #{{ id_atencion }}</p></div>{% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}<form method="POST"><table><thead><tr><th>Examen</th><th>Estado</th><th>Resultado</th></tr></thead><tbody>{% for e in examenes %}<tr><td><b>{{ e[1] }}</b></td><td>{% if e[2] == 'Completado' %}<span class="badge badge-verde">Completado</span>{% else %}<span class="badge badge-amarillo">Pendiente</span>{% endif %}</td><td>{% if e[2] == 'Completado' %}<span style="font-style: italic; color: #28a745;">{{ e[3] }}</span><input type="hidden" name="resultado_{{ e[0] }}" value="{{ e[3] }}">{% else %}<textarea name="resultado_{{ e[0] }}" rows="2" placeholder="Ingrese el valor..." required style="width:100%;">{{ e[3] }}</textarea>{% endif %}</td></tr>{% endfor %}</tbody></table><div style="margin-top: 15px;"><button type="submit" class="btn btn-success">Guardar Todos</button><a href="{{ url_for('laboratorio') }}" class="btn btn-danger">Cancelar</a></div></form>"""
     html_procesar = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_procesar)
     return render_template_string(html_procesar, id_atencion=id_atencion, paciente=paciente, examenes=examenes, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
 
 # ==========================================
-# EJECUCIÓN
+# NUEVO MÓDULO: INVENTARIO
+# ==========================================
+def obtener_reactivos():
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("SELECT id, nombre, cantidad, unidad, fecha_caducidad, proveedor FROM reactivos ORDER BY id DESC")
+    datos = cursor.fetchall(); conn.close(); return datos
+
+def agregar_reactivo(nombre, cantidad, unidad, caducidad, proveedor):
+    try:
+        conn = get_db_connection(); cursor = conn.cursor()
+        cursor.execute("INSERT INTO reactivos (nombre, cantidad, unidad, fecha_caducidad, proveedor) VALUES (?, ?, ?, ?, ?)", (nombre, cantidad, unidad, caducidad, proveedor))
+        conn.commit(); conn.close(); return True, "Reactivo agregado exitosamente."
+    except Exception as e: return False, str(e)
+
+def consumir_reactivo(id_reactivo, cantidad_usada):
+    try:
+        conn = get_db_connection(); cursor = conn.cursor()
+        cursor.execute("SELECT cantidad FROM reactivos WHERE id=?", (id_reactivo,))
+        stock_actual = cursor.fetchone()[0]
+        if stock_actual < cantidad_usada: return False, f"Stock insuficiente. Solo hay {stock_actual}."
+        nuevo_stock = stock_actual - cantidad_usada
+        cursor.execute("UPDATE reactivos SET cantidad=? WHERE id=?", (nuevo_stock, id_reactivo))
+        conn.commit(); conn.close(); return True, f"Consumo registrado. Nuevo stock: {nuevo_stock}"
+    except Exception as e: return False, str(e)
+
+@app.route('/inventario', methods=['GET'])
+def inventario():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    reactivos = obtener_reactivos()
+    contenido_inv = """<h2 style="color: #0d2b45;">📦 Inventario de Reactivos</h2><div style="display: flex; gap: 10px; margin-bottom: 15px;"><a href="{{ url_for('agregar_reactivo') }}" class="btn btn-success">+ Agregar Reactivo</a></div><div style="overflow-x: auto;"><table><thead><tr><th>ID</th><th>Nombre</th><th>Cantidad</th><th>Unidad</th><th>Caducidad</th><th>Proveedor</th><th>Acciones</th></tr></thead><tbody>{% for r in reactivos %}<tr><td>{{ r[0] }}</td><td>{{ r[1] }}</td><td><b>{{ r[2] }}</b></td><td>{{ r[3] }}</td><td>{{ r[4] }}</td><td>{{ r[5] }}</td><td><a href="{{ url_for('consumir_reactivo', id=r[0]) }}" class="btn btn-warning" style="padding: 4px 10px; font-size: 12px;">- Consumir</a></td></tr>{% else %}<tr><td colspan="7" style="text-align:center;">No hay reactivos registrados.</td></tr>{% endfor %}</tbody></table></div>"""
+    html_inv = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_inv)
+    return render_template_string(html_inv, reactivos=reactivos)
+
+@app.route('/inventario/agregar', methods=['GET', 'POST'])
+def agregar_reactivo():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    mensaje = ""; tipo_mensaje = ""
+    if request.method == 'POST':
+        nombre = request.form['nombre']; cantidad = float(request.form['cantidad']); unidad = request.form['unidad']
+        caducidad = request.form['fecha_caducidad']; proveedor = request.form['proveedor']
+        exito, msg = agregar_reactivo(nombre, cantidad, unidad, caducidad, proveedor)
+        if exito: return redirect(url_for('inventario'))
+        else: mensaje = msg; tipo_mensaje = "alert-danger"
+    contenido_agregar = """<h2 style="color: #0d2b45;">Agregar Nuevo Reactivo</h2><div style="background: #f8f9fa; padding: 20px; border-radius: 12px;">{% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}<form method="POST"><label>Nombre del Reactivo</label><input type="text" name="nombre" required><label>Cantidad (Número)</label><input type="number" step="0.01" name="cantidad" required><label>Unidad (ml, gr, unid)</label><input type="text" name="unidad" required><label>Fecha de Caducidad (AAAA-MM-DD)</label><input type="date" name="fecha_caducidad"><label>Proveedor</label><input type="text" name="proveedor"><button type="submit" class="btn btn-primary">Guardar Reactivo</button> <a href="{{ url_for('inventario') }}" class="btn btn-danger">Cancelar</a></form></div>"""
+    html_agregar = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_agregar)
+    return render_template_string(html_agregar, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
+
+@app.route('/inventario/consumir/<int:id>', methods=['GET', 'POST'])
+def consumir_reactivo(id):
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    mensaje = ""; tipo_mensaje = ""
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("SELECT id, nombre, cantidad FROM reactivos WHERE id=?", (id,)); reactivo = cursor.fetchone(); conn.close()
+    if not reactivo: return "Reactivo no encontrado", 404
+    if request.method == 'POST':
+        cantidad_usar = float(request.form['cantidad_usar'])
+        exito, msg = consumir_reactivo(id, cantidad_usar)
+        if exito: return redirect(url_for('inventario'))
+        else: mensaje = msg; tipo_mensaje = "alert-danger"
+    contenido_consumir = """<h2 style="color: #0d2b45;">Consumir Reactivo</h2><div style="background: #f8f9fa; padding: 20px; border-radius: 12px;"><p><b>Reactivo:</b> {{ reactivo[1] }}</p><p><b>Stock actual:</b> {{ reactivo[2] }}</p>{% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}<form method="POST"><label>Cantidad a consumir</label><input type="number" step="0.01" name="cantidad_usar" required><button type="submit" class="btn btn-warning">Consumir Stock</button> <a href="{{ url_for('inventario') }}" class="btn btn-danger">Cancelar</a></form></div>"""
+    html_consumir = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_consumir)
+    return render_template_string(html_consumir, reactivo=reactivo, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
+
+# ==========================================
+# NUEVO MÓDULO: CATÁLOGO DE EXÁMENES
+# ==========================================
+def obtener_examenes_catalogo():
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("SELECT id, nombre_examen FROM examenes_catalogo ORDER BY id ASC")
+    datos = cursor.fetchall(); conn.close(); return datos
+
+def agregar_examen_catalogo(nombre_examen):
+    try:
+        conn = get_db_connection(); cursor = conn.cursor()
+        cursor.execute("INSERT INTO examenes_catalogo (nombre_examen) VALUES (?)", (nombre_examen,))
+        conn.commit(); conn.close(); return True, "Examen agregado al catálogo."
+    except Exception as e: return False, str(e)
+
+@app.route('/catalogo_examenes', methods=['GET'])
+def catalogo_examenes():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    examenes = obtener_examenes_catalogo()
+    contenido_cat = """<h2 style="color: #0d2b45;">📋 Catálogo de Exámenes</h2><div style="display: flex; gap: 10px; margin-bottom: 15px;"><a href="{{ url_for('agregar_examen_catalogo') }}" class="btn btn-success">+ Agregar Examen</a></div><table><thead><tr><th>ID</th><th>Nombre del Examen</th></tr></thead><tbody>{% for e in examenes %}<tr><td>{{ e[0] }}</td><td>{{ e[1] }}</td></tr>{% else %}<tr><td colspan="2" style="text-align:center;">No hay exámenes en el catálogo.</td></tr>{% endfor %}</tbody></table>"""
+    html_cat = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_cat)
+    return render_template_string(html_cat, examenes=examenes)
+
+@app.route('/catalogo_examenes/agregar', methods=['GET', 'POST'])
+def agregar_examen_catalogo():
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    mensaje = ""; tipo_mensaje = ""
+    if request.method == 'POST':
+        nombre = request.form['nombre_examen']
+        exito, msg = agregar_examen_catalogo(nombre)
+        if exito: return redirect(url_for('catalogo_examenes'))
+        else: mensaje = msg; tipo_mensaje = "alert-danger"
+    contenido_agregar_ex = """<h2 style="color: #0d2b45;">Agregar Nuevo Examen al Catálogo</h2><div style="background: #f8f9fa; padding: 20px; border-radius: 12px;">{% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}<form method="POST"><label>Nombre del Examen</label><input type="text" name="nombre_examen" required><button type="submit" class="btn btn-primary">Guardar Examen</button> <a href="{{ url_for('catalogo_examenes') }}" class="btn btn-danger">Cancelar</a></form></div>"""
+    html_agregar_ex = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_agregar_ex)
+    return render_template_string(html_agregar_ex, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
+
+# ==========================================
+# EJECUCIÓN FINAL
 # ==========================================
 if __name__ == '__main__':
-    # Si estás probando localmente, usa esto:
     app.run(host='0.0.0.0', port=8080, debug=True)
