@@ -1783,4 +1783,116 @@ def nuevo_examen_catalogo():
             <div id="params_container">
                 <div class="adm-form-grid">
                     <div class="adm-field"><label>Nombre Parámetro</label><input type="text" name="param_nombre[]" required></div>
-                    <div class="adm-field"><label>Unidad</label><input
+                    <div class="adm-field"><label>Unidad</label><input type="text" name="param_unidad[]"></div>
+                    <div class="adm-field"><label>Valor Normal</label><input type="text" name="param_normal[]"></div>
+                </div>
+            </div>
+            <button type="button" onclick="agregarParam()" class="btn btn-warning" style="margin-bottom: 15px;">+ Agregar Parámetro</button>
+            
+            <div class="toolbar">
+                <button type="submit" class="btn btn-success">Graba</button>
+                <button type="reset" class="btn btn-danger">Cancela</button>
+                <a href="{{ url_for('catalogo_examenes') }}" class="btn btn-secondary" style="background:#555; color:white;">Salir</a>
+            </div>
+        </form>
+    </div>
+    <script>
+        function agregarParam() {
+            var container = document.getElementById("params_container");
+            var newDiv = document.createElement("div");
+            newDiv.className = "adm-form-grid";
+            newDiv.style.marginTop = "10px";
+            newDiv.innerHTML = `
+                <div class="adm-field"><label>Nombre Parámetro</label><input type="text" name="param_nombre[]" required></div>
+                <div class="adm-field"><label>Unidad</label><input type="text" name="param_unidad[]"></div>
+                <div class="adm-field"><label>Valor Normal</label><input type="text" name="param_normal[]"></div>
+            `;
+            container.appendChild(newDiv);
+        }
+    </script>
+    """
+    html_form = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_form)
+    return render_template_string(html_form, secciones=secciones, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
+
+@app.route('/catalogo_examenes/editar/<int:id>', methods=['GET', 'POST'])
+def editar_examen_catalogo(id):
+    if 'usuario' not in session or session['rol'] != 'administrador': return redirect(url_for('login'))
+    secciones = obtener_secciones()
+    conn = get_db_connection(); cursor = conn.cursor()
+    
+    if request.method == 'POST':
+        codigo = request.form['codigo']; descripcion = request.form['descripcion']
+        id_seccion = int(request.form['id_seccion']) if request.form['id_seccion'] else None
+        precio = float(request.form['precio']) if request.form['precio'] else 0.0
+        abreviatura = request.form['abreviatura']; interviene = request.form['interviene_reporte']
+        epidemiologico = request.form['epidemiologico']; valor_normal = request.form['valor_normal']
+        activo = 1 if request.form.get('activo') else 0
+        
+        try:
+            cursor.execute("""
+                UPDATE examenes_catalogo SET codigo=?, descripcion=?, id_seccion=?, precio=?, abreviatura=?, interviene_reporte=?, epidemiologico=?, valor_normal=?, activo=?
+                WHERE id=?
+            """, (codigo, descripcion, id_seccion, precio, abreviatura, interviene, epidemiologico, valor_normal, activo, id))
+            conn.commit(); conn.close()
+            return redirect(url_for('catalogo_examenes'))
+        except Exception as e:
+            mensaje = f"Error: {str(e)}"; tipo_mensaje = "alert-danger"
+            conn.rollback()
+        finally:
+            conn.close()
+
+    else:
+        cursor.execute("SELECT * FROM examenes_catalogo WHERE id=?", (id,))
+        examen = cursor.fetchone()
+        if not examen: return "Examen no encontrado", 404
+        conn.close()
+        mensaje = ""; tipo_mensaje = ""
+
+    contenido_editar = """
+    <h2 style="color: #0d2b45;">Editar Examen de Laboratorio</h2>
+    <div style="background: #f8f9fa; padding: 20px; border-radius: 12px;">
+        {% if mensaje %}<div class="alert {{ tipo_mensaje }}">{{ mensaje }}</div>{% endif %}
+        <form method="POST">
+            <div class="adm-form-grid">
+                <div class="adm-field"><label>Código</label><input type="text" name="codigo" value="{{ examen[1] }}"></div>
+                <div class="adm-field"><label>Descripción</label><input type="text" name="descripcion" value="{{ examen[2] }}" required></div>
+                <div class="adm-field"><label>Sección</label>
+                    <select name="id_seccion"><option value="">Seleccione</option>
+                    {% for s in secciones %}<option value="{{ s[0] }}" {% if s[0] == examen[3] %}selected{% endif %}>{{ s[1] }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="adm-field"><label>Precio (S/.)</label><input type="number" step="0.01" name="precio" value="{{ examen[4] }}"></div>
+                <div class="adm-field"><label>Abreviatura</label><input type="text" name="abreviatura" value="{{ examen[5] }}"></div>
+                <div class="adm-field"><label>Interviene en Reporte</label>
+                    <select name="interviene_reporte"><option value="SI" {% if examen[6] == 'SI' %}selected{% endif %}>SI</option><option value="NO" {% if examen[6] == 'NO' %}selected{% endif %}>NO</option></select>
+                </div>
+                <div class="adm-field"><label>Epidemiológico</label>
+                    <select name="epidemiologico"><option value="NO" {% if examen[7] == 'NO' %}selected{% endif %}>NO</option><option value="SI" {% if examen[7] == 'SI' %}selected{% endif %}>SI</option></select>
+                </div>
+                <div class="adm-field"><label>Activo</label>
+                    <select name="activo"><option value="1" {% if examen[9] == 1 %}selected{% endif %}>Activo</option><option value="0" {% if examen[9] == 0 %}selected{% endif %}>Inactivo</option></select>
+                </div>
+            </div>
+            <div class="adm-field"><label>Valor Normal General</label><textarea name="valor_normal" rows="3">{{ examen[8] }}</textarea></div>
+            
+            <div class="toolbar">
+                <button type="submit" class="btn btn-success">Graba</button>
+                <button type="reset" class="btn btn-danger">Cancela</button>
+                <a href="{{ url_for('catalogo_examenes') }}" class="btn btn-secondary" style="background:#555; color:white;">Salir</a>
+            </div>
+        </form>
+    </div>
+    """
+    html_edit = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido_editar)
+    return render_template_string(html_edit, examen=examen, secciones=secciones, mensaje=mensaje, tipo_mensaje=tipo_mensaje)
+
+def obtener_secciones():
+    conn = get_db_connection(); cursor = conn.cursor()
+    cursor.execute("SELECT id, nombre_seccion FROM examenes_secciones ORDER BY id ASC")
+    datos = cursor.fetchall(); conn.close(); return datos
+
+# ==========================================
+# EJECUCIÓN
+# ==========================================
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080, debug=True)
