@@ -40,14 +40,22 @@ def init_db():
         auto_inc = "INTEGER PRIMARY KEY AUTOINCREMENT"
         conflict = ""
 
-    # --- USUARIOS ---
+        # --- USUARIOS ---
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS usuarios ( id {auto_inc}, usuario TEXT UNIQUE NOT NULL, password TEXT NOT NULL, rol TEXT NOT NULL )''')
-    cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('admin', 'admin', 'administrador') {conflict}")
-    cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('doctor', 'doctor', 'medico') {conflict}")
-    cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('lab', 'lab', 'laboratorista') {conflict}")
-    cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('nurse', 'nurse', 'enfermera') {conflict}")
-    cursor.execute(f"INSERT INTO usuarios (usuario, password, rol) VALUES ('tecnologo', 'tecnologo', 'tecnologo') {conflict}")
-
+    
+    # Insertar usuarios de prueba (con validación para SQLite local y PostgreSQL)
+    if IS_POSTGRES:
+        cursor.execute("INSERT INTO usuarios (usuario, password, rol) VALUES ('admin', 'admin', 'administrador') ON CONFLICT (usuario) DO NOTHING")
+        cursor.execute("INSERT INTO usuarios (usuario, password, rol) VALUES ('doctor', 'doctor', 'medico') ON CONFLICT (usuario) DO NOTHING")
+        cursor.execute("INSERT INTO usuarios (usuario, password, rol) VALUES ('lab', 'lab', 'laboratorista') ON CONFLICT (usuario) DO NOTHING")
+        cursor.execute("INSERT INTO usuarios (usuario, password, rol) VALUES ('nurse', 'nurse', 'enfermera') ON CONFLICT (usuario) DO NOTHING")
+        cursor.execute("INSERT INTO usuarios (usuario, password, rol) VALUES ('tecnologo', 'tecnologo', 'tecnologo') ON CONFLICT (usuario) DO NOTHING")
+    else:
+        cursor.execute("INSERT OR IGNORE INTO usuarios (usuario, password, rol) VALUES ('admin', 'admin', 'administrador')")
+        cursor.execute("INSERT OR IGNORE INTO usuarios (usuario, password, rol) VALUES ('doctor', 'doctor', 'medico')")
+        cursor.execute("INSERT OR IGNORE INTO usuarios (usuario, password, rol) VALUES ('lab', 'lab', 'laboratorista')")
+        cursor.execute("INSERT OR IGNORE INTO usuarios (usuario, password, rol) VALUES ('nurse', 'nurse', 'enfermera')")
+        cursor.execute("INSERT OR IGNORE INTO usuarios (usuario, password, rol) VALUES ('tecnologo', 'tecnologo', 'tecnologo')")
     # --- MÓDULO 1: ADMISIÓN ---
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS pacientes ( id {auto_inc}, dni TEXT UNIQUE NOT NULL, nombre TEXT NOT NULL, apellido TEXT NOT NULL, fecha_nacimiento TEXT, telefono TEXT, direccion TEXT, sexo TEXT DEFAULT '', edad INTEGER DEFAULT 0 )''')
     
@@ -453,16 +461,16 @@ def ingresar_resultado(id_orden):
     orden = cursor.fetchone()
     conn.close()
     
-    contenido = f"""
-    <h2>Ingresar Resultado para: {orden[3]}</h2>
-    <p><b>Paciente:</b> {orden[1]} {orden[2]}</p>
+    contenido = """
+    <h2>Ingresar Resultado para: {{ orden[3] }}</h2>
+    <p><b>Paciente:</b> {{ orden[1] }} {{ orden[2] }}</p>
     <form method="POST">
         <label>Resultado</label><textarea name="resultado" rows="4" required></textarea>
         <button type="submit" class="btn btn-success">Guardar Resultado</button>
         <a href="{{ url_for('laboratorio') }}" class="btn btn-danger">Cancelar</a>
     </form>
     """
-    return render_template_string(LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido))
+    return render_template_string(LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido), orden=orden)
 
 @app.route('/laboratorio/subir_pdf/<int:id_orden>', methods=['GET', 'POST'])
 def subir_imagen(id_orden):
@@ -591,12 +599,20 @@ def atender_cita(id_cita):
     lab_results = cursor.fetchall()
     conn.close()
     
-    contenido = f"""
-    <h2>Atender Cita #{id_cita}</h2>
+    # Cargar imágenes asociadas a cada orden
+    imagenes_dict = {}
+    for lab in lab_results:
+        conn = get_db_connection(); cursor = conn.cursor()
+        cursor.execute("SELECT id, nombre_archivo, ruta_archivo FROM imagenes_laboratorio WHERE id_orden=?", (lab[2],))
+        imagenes_dict[lab[2]] = cursor.fetchall()
+        conn.close()
+
+    contenido = """
+    <h2>Atender Cita #{{ id_cita }}</h2>
     <div style="background:#e9ecef; padding:15px; border-radius:8px; margin-bottom:15px;">
-        <b>{cita[0]} {cita[1]}</b> (DNI: {cita[2]}) <br>
-        <b>Servicio:</b> {cita[3]} <br>
-        <b>Fecha:</b> {cita[4]}
+        <b>{{ cita[0] }} {{ cita[1] }}</b> (DNI: {{ cita[2] }}) <br>
+        <b>Servicio:</b> {{ cita[3] }} <br>
+        <b>Fecha:</b> {{ cita[4] }}
     </div>
     
     <h3>Resultados de Laboratorio / Imágenes</h3>
@@ -626,15 +642,7 @@ def atender_cita(id_cita):
         <a href="{{ url_for('descargar_reporte_final', id_cita=id_cita) }}" target="_blank" class="btn btn-primary">🖨️ Imprimir Reporte</a>
     </form>
     """
-    # Cargar imágenes asociadas a cada orden
-    imagenes_dict = {}
-    for lab in lab_results:
-        conn = get_db_connection(); cursor = conn.cursor()
-        cursor.execute("SELECT id, nombre_archivo, ruta_archivo FROM imagenes_laboratorio WHERE id_orden=?", (lab[2],))
-        imagenes_dict[lab[2]] = cursor.fetchall()
-        conn.close()
-
-    return render_template_string(LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido), cita=cita, lab_results=lab_results, imagenes=imagenes_dict)
+    return render_template_string(LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido), id_cita=id_cita, cita=cita, lab_results=lab_results, imagenes=imagenes_dict)
 
 # ==========================================
 # NUEVA RUTA: IMPRESIÓN DE REPORTE FINAL (FORMATO DE IMPRESIÓN PERSONALIZABLE)
