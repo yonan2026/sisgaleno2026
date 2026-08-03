@@ -20,6 +20,7 @@ from reportlab.lib import colors
 import barcode
 from barcode.writer import ImageWriter
 from PIL import Image
+from functools import wraps  # <--- CAMBIO 1: Import necesario para el decorador
 
 load_dotenv()
 app = Flask(__name__)
@@ -27,6 +28,16 @@ app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
 app.config['UPLOAD_FOLDER'] = 'static'
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
 
+# ========================== CAMBIO 2: DECORADOR DE AUTENTICACIÓN ==========================
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'usuario' not in session:
+            return redirect(url_for('login', next=request.url))
+        return f(*args, **kwargs)
+    return decorated_function
+
+# ========================== BASE DE DATOS ==========================
 DATABASE_URL = os.environ.get('DATABASE_URL')
 IS_POSTGRES = DATABASE_URL is not None and DATABASE_URL.startswith('postgresql')
 
@@ -34,7 +45,6 @@ IS_POSTGRES = DATABASE_URL is not None and DATABASE_URL.startswith('postgresql')
 TICKET_80MM = (80 * 28.35, 297 * 28.35)
 TICKET_80MM_LANDSCAPE = (297 * 28.35, 80 * 28.35)
 
-# ========================== BASE DE DATOS ==========================
 def get_db_connection():
     if IS_POSTGRES:
         return psycopg2.connect(DATABASE_URL)
@@ -1905,6 +1915,8 @@ def imprimir_receta_pdf(id_receta):
 
 # ========================== CONFIGURACIÓN ==========================
 @app.route('/configuracion', methods=['GET','POST'])
+# ========================== CAMBIO 3: AGREGADO EL DECORADOR LOGIN_REQUIRED ==========================
+@login_required
 def configuracion_sistema():
     if 'Configuración' not in get_user_modules(session.get('rol')):
         return redirect(url_for('dashboard'))
