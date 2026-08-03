@@ -2351,4 +2351,5 @@ def subir_sello():
     return render_template_string(base, nombre_sistema=nombre_sistema, user_modules=get_user_modules(session.get('rol')))
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=False)
