@@ -4,3 +4,4 @@ reportlab
 psycopg2-binary
 python-dotenv
 python-barcode==0.15.0
+typing-extensions>=4.0.0
