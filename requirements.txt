@@ -3,3 +3,4 @@ gunicorn
 reportlab
 psycopg2-binary
 python-dotenv
+python-barcode==0.13.1
