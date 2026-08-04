@@ -45,6 +45,17 @@ IS_POSTGRES = DATABASE_URL is not None and DATABASE_URL.startswith('postgresql')
 TICKET_80MM = (80 * 28.35, 297 * 28.35)
 TICKET_80MM_LANDSCAPE = (297 * 28.35, 80 * 28.35)
 
+# ========================== FUNCIÓN UNIVERSAL PARA CONSULTAS ==========================
+def ejecutar_consulta(cursor, query, params=None):
+    """Ejecuta una consulta SQL adaptando los placeholders según el motor."""
+    if IS_POSTGRES:
+        # Reemplazar ? por %s (los placeholders de psycopg2)
+        query = query.replace('?', '%s')
+    if params is None:
+        cursor.execute(query)
+    else:
+        cursor.execute(query, params)
+
 def get_db_connection():
     if IS_POSTGRES:
         return psycopg2.connect(DATABASE_URL)
@@ -72,9 +83,9 @@ def init_db():
     for user, pwd, rol in [('admin','admin','administrador'),('doctor','doctor','medico'),('lab','lab','laboratorista'),('nurse','nurse','enfermera'),('tecnologo','tecnologo','tecnologo')]:
         h = generate_password_hash(pwd)
         if IS_POSTGRES:
-            cursor.execute("INSERT INTO usuarios (usuario, password_hash, rol) VALUES (%s,%s,%s) ON CONFLICT (usuario) DO NOTHING", (user,h,rol))
+            ejecutar_consulta(cursor, "INSERT INTO usuarios (usuario, password_hash, rol) VALUES (%s,%s,%s) ON CONFLICT (usuario) DO NOTHING", (user,h,rol))
         else:
-            cursor.execute("INSERT OR IGNORE INTO usuarios (usuario, password_hash, rol) VALUES (?,?,?)", (user,h,rol))
+            ejecutar_consulta(cursor, "INSERT OR IGNORE INTO usuarios (usuario, password_hash, rol) VALUES (?,?,?)", (user,h,rol))
 
     # Pacientes
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS pacientes (
@@ -97,7 +108,7 @@ def init_db():
         deleted INTEGER DEFAULT 0
     )''')
     if not IS_POSTGRES:
-        cursor.execute("PRAGMA table_info(pacientes)")
+        ejecutar_consulta(cursor, "PRAGMA table_info(pacientes)")
         cols = [row[1] for row in cursor.fetchall()]
         for col in ['nro_afiliacion','deleted']:
             if col not in cols:
@@ -118,11 +129,11 @@ def init_db():
     servicios_data = [('MEDICINA GENERAL',50),('MEDICINA INTERNA',60),('MEDICINA FISICA',40),('PEDIATRIA',35),('GINECOLOGIA',70),('TRAUMATOLOGIA',65),('CIRUGIA',100),('OTROS',50)]
     for nombre, precio in servicios_data:
         if IS_POSTGRES:
-            cursor.execute("SELECT 1 FROM servicios WHERE nombre = %s", (nombre,))
+            ejecutar_consulta(cursor, "SELECT 1 FROM servicios WHERE nombre = %s", (nombre,))
             if not cursor.fetchone():
-                cursor.execute("INSERT INTO servicios (nombre, precio_base) VALUES (%s,%s)", (nombre, precio))
+                ejecutar_consulta(cursor, "INSERT INTO servicios (nombre, precio_base) VALUES (%s,%s)", (nombre, precio))
         else:
-            cursor.execute("INSERT OR IGNORE INTO servicios (nombre, precio_base) VALUES (?,?)", (nombre, precio))
+            ejecutar_consulta(cursor, "INSERT OR IGNORE INTO servicios (nombre, precio_base) VALUES (?,?)", (nombre, precio))
 
     # Citas
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS citas (
@@ -159,9 +170,9 @@ def init_db():
     examenes_data = [(1,'145','HEMOGRAMA COMPLETO',50),(2,'G002','GLUCOSA EN AYUNAS',20)]
     for id_ex, cod, desc, precio in examenes_data:
         if IS_POSTGRES:
-            cursor.execute("INSERT INTO examenes_catalogo (id,codigo,descripcion,precio) VALUES (%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING", (id_ex, cod, desc, precio))
+            ejecutar_consulta(cursor, "INSERT INTO examenes_catalogo (id,codigo,descripcion,precio) VALUES (%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING", (id_ex, cod, desc, precio))
         else:
-            cursor.execute("INSERT OR IGNORE INTO examenes_catalogo (id,codigo,descripcion,precio) VALUES (?,?,?,?)", (id_ex, cod, desc, precio))
+            ejecutar_consulta(cursor, "INSERT OR IGNORE INTO examenes_catalogo (id,codigo,descripcion,precio) VALUES (?,?,?,?)", (id_ex, cod, desc, precio))
 
     # Parámetros
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS examenes_parametros (
@@ -193,7 +204,7 @@ def init_db():
         validado INTEGER DEFAULT 0
     )''')
     if not IS_POSTGRES:
-        cursor.execute("PRAGMA table_info(ordenes_laboratorio)")
+        ejecutar_consulta(cursor, "PRAGMA table_info(ordenes_laboratorio)")
         cols = [row[1] for row in cursor.fetchall()]
         for col in ['codigo_muestra','fecha_validez','examen_manual','servicio_manual','tipo_orden','tecnologo_id','fecha_resultado','validado']:
             if col not in cols:
@@ -249,7 +260,7 @@ def init_db():
         result_size {text} DEFAULT 'A4'
     )''')
     if not IS_POSTGRES:
-        cursor.execute("PRAGMA table_info(configuracion_sistema)")
+        ejecutar_consulta(cursor, "PRAGMA table_info(configuracion_sistema)")
         cols = [row[1] for row in cursor.fetchall()]
         for col in ['sello_path','ticket_size','report_size','result_size']:
             if col not in cols:
@@ -257,11 +268,11 @@ def init_db():
     else:
         for col in ['sello_path','ticket_size','report_size','result_size']:
             cursor.execute(f"ALTER TABLE configuracion_sistema ADD COLUMN IF NOT EXISTS {col} TEXT DEFAULT ''")
-    # Insertar registro inicial si no existe (CORREGIDO)
+    # Insertar registro inicial si no existe
     if IS_POSTGRES:
-        cursor.execute("INSERT INTO configuracion_sistema (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
+        ejecutar_consulta(cursor, "INSERT INTO configuracion_sistema (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
     else:
-        cursor.execute("INSERT OR IGNORE INTO configuracion_sistema (id) VALUES (1)")
+        ejecutar_consulta(cursor, "INSERT OR IGNORE INTO configuracion_sistema (id) VALUES (1)")
 
     # Módulos
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS config_modulos (
@@ -273,9 +284,9 @@ def init_db():
     modulos_data = [('Admisión','Gestión de pacientes y citas'),('Caja','Cobros y emisión de boletas'),('Laboratorio','Procesamiento de muestras y resultados'),('Atención Médica','Evaluación médica e informes clínicos'),('Configuración','Panel de control del sistema')]
     for nombre, desc in modulos_data:
         if IS_POSTGRES:
-            cursor.execute("INSERT INTO config_modulos (nombre, descripcion) VALUES (%s,%s) ON CONFLICT (nombre) DO NOTHING", (nombre, desc))
+            ejecutar_consulta(cursor, "INSERT INTO config_modulos (nombre, descripcion) VALUES (%s,%s) ON CONFLICT (nombre) DO NOTHING", (nombre, desc))
         else:
-            cursor.execute("INSERT OR IGNORE INTO config_modulos (nombre, descripcion) VALUES (?,?)", (nombre, desc))
+            ejecutar_consulta(cursor, "INSERT OR IGNORE INTO config_modulos (nombre, descripcion) VALUES (?,?)", (nombre, desc))
 
     # Médicos
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS medicos (
@@ -290,7 +301,7 @@ def init_db():
         activo INTEGER DEFAULT 1
     )''')
     if not IS_POSTGRES:
-        cursor.execute("PRAGMA table_info(medicos)")
+        ejecutar_consulta(cursor, "PRAGMA table_info(medicos)")
         cols = [row[1] for row in cursor.fetchall()]
         for col in ['nombre','apellido','especialidad','horario','telefono','email','numero_licencia','activo']:
             if col not in cols:
@@ -314,9 +325,9 @@ def init_db():
                     ('medico','Admisión'),('medico','Caja'),('medico','Atención Médica'),('laboratorista','Laboratorio'),('tecnologo','Laboratorio'),('enfermera','Admisión')]
     for rol, modulo in permisos_data:
         if IS_POSTGRES:
-            cursor.execute("INSERT INTO permisos_roles (rol, modulo) VALUES (%s,%s) ON CONFLICT (rol, modulo) DO NOTHING", (rol, modulo))
+            ejecutar_consulta(cursor, "INSERT INTO permisos_roles (rol, modulo) VALUES (%s,%s) ON CONFLICT (rol, modulo) DO NOTHING", (rol, modulo))
         else:
-            cursor.execute("INSERT OR IGNORE INTO permisos_roles (rol, modulo) VALUES (?,?)", (rol, modulo))
+            ejecutar_consulta(cursor, "INSERT OR IGNORE INTO permisos_roles (rol, modulo) VALUES (?,?)", (rol, modulo))
 
     # Procedimientos
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS procedimientos (
@@ -330,9 +341,9 @@ def init_db():
     procedimientos_data = [('71020','EXAMEN RADIOLOGICO, TORAX, FRONTAL Y LATERAL','examen',50),('71015','EXAMEN RADIOLOGICO, TORAX; ESTEREOTÁCTICO, FRONTAL','examen',45),('71010','EXAMEN RADIOLOGICO, TORAX; INCIDENCIA FRONTAL','examen',40),('ECO01','Ecografía Obstétrica','procedimiento',80),('ECO02','Ecografía General','procedimiento',70),('TOM01','Tomografía Computarizada','procedimiento',150)]
     for cod, nombre, tipo, precio in procedimientos_data:
         if IS_POSTGRES:
-            cursor.execute("INSERT INTO procedimientos (codigo, nombre, tipo, precio) VALUES (%s,%s,%s,%s) ON CONFLICT (codigo) DO NOTHING", (cod, nombre, tipo, precio))
+            ejecutar_consulta(cursor, "INSERT INTO procedimientos (codigo, nombre, tipo, precio) VALUES (%s,%s,%s,%s) ON CONFLICT (codigo) DO NOTHING", (cod, nombre, tipo, precio))
         else:
-            cursor.execute("INSERT OR IGNORE INTO procedimientos (codigo, nombre, tipo, precio) VALUES (?,?,?,?)", (cod, nombre, tipo, precio))
+            ejecutar_consulta(cursor, "INSERT OR IGNORE INTO procedimientos (codigo, nombre, tipo, precio) VALUES (?,?,?,?)", (cod, nombre, tipo, precio))
 
     # Recetas
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS recetas (
@@ -388,9 +399,9 @@ def init_db():
     medicamentos_data = [('PARA001','Paracetamol','Analgésico y antipirético',5.50,100,'tableta',1,None,'Bayer'),('IBU001','Ibuprofeno','Antiinflamatorio',8.00,80,'tableta',1,None,'Pfizer'),('AMO001','Amoxicilina','Antibiótico',12.50,50,'cápsula',1,None,'Sandoz')]
     for cod, nombre, desc, precio, stock, unidad, activo, fecha_venc, laboratorio in medicamentos_data:
         if IS_POSTGRES:
-            cursor.execute("INSERT INTO medicamentos (codigo, nombre, descripcion, precio, stock, unidad_medida, activo, fecha_vencimiento, laboratorio) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (codigo) DO NOTHING", (cod, nombre, desc, precio, stock, unidad, activo, fecha_venc, laboratorio))
+            ejecutar_consulta(cursor, "INSERT INTO medicamentos (codigo, nombre, descripcion, precio, stock, unidad_medida, activo, fecha_vencimiento, laboratorio) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (codigo) DO NOTHING", (cod, nombre, desc, precio, stock, unidad, activo, fecha_venc, laboratorio))
         else:
-            cursor.execute("INSERT OR IGNORE INTO medicamentos (codigo, nombre, descripcion, precio, stock, unidad_medida, activo, fecha_vencimiento, laboratorio) VALUES (?,?,?,?,?,?,?,?,?)", (cod, nombre, desc, precio, stock, unidad, activo, fecha_venc, laboratorio))
+            ejecutar_consulta(cursor, "INSERT OR IGNORE INTO medicamentos (codigo, nombre, descripcion, precio, stock, unidad_medida, activo, fecha_vencimiento, laboratorio) VALUES (?,?,?,?,?,?,?,?,?)", (cod, nombre, desc, precio, stock, unidad, activo, fecha_venc, laboratorio))
 
     conn.commit()
     conn.close()
@@ -401,7 +412,7 @@ init_db()
 def obtener_configuracion():
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT nombre_sistema, tamano_hoja, logo_path, encabezado_texto, pie_pagina_texto, report_header, report_footer, sello_path, ticket_size, report_size, result_size FROM configuracion_sistema WHERE id=1")
+    ejecutar_consulta(cur, "SELECT nombre_sistema, tamano_hoja, logo_path, encabezado_texto, pie_pagina_texto, report_header, report_footer, sello_path, ticket_size, report_size, result_size FROM configuracion_sistema WHERE id=1")
     row = cur.fetchone()
     conn.close()
     return row
@@ -431,7 +442,7 @@ def get_user_modules(rol):
     if not rol: return []
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT modulo FROM permisos_roles WHERE rol=?", (rol,))
+    ejecutar_consulta(cur, "SELECT modulo FROM permisos_roles WHERE rol=?", (rol,))
     mods = [r[0] for r in cur.fetchall()]
     conn.close()
     return mods
@@ -439,7 +450,7 @@ def get_user_modules(rol):
 def generar_siguiente_hc():
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT historia_clinica FROM pacientes WHERE historia_clinica IS NOT NULL AND deleted=0")
+    ejecutar_consulta(cur, "SELECT historia_clinica FROM pacientes WHERE historia_clinica IS NOT NULL AND deleted=0")
     hs = {r[0] for r in cur.fetchall()}
     conn.close()
     n=1
@@ -451,7 +462,7 @@ def generar_siguiente_hc():
 def generar_siguiente_boleta():
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT MAX(id) FROM pagos")
+    ejecutar_consulta(cur, "SELECT MAX(id) FROM pagos")
     max_id = cur.fetchone()[0]
     conn.close()
     return f"B-{max_id+1:04d}" if max_id else "B-0001"
@@ -469,14 +480,14 @@ def crear_paciente_sistema(dni, nombre, apellido, fecha_nac='', telefono='', cel
     dni = (dni or '').strip()
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, historia_clinica FROM pacientes WHERE dni = ? LIMIT 1", (dni,))
+    ejecutar_consulta(cur, "SELECT id, historia_clinica FROM pacientes WHERE dni = ? LIMIT 1", (dni,))
     existente = cur.fetchone()
     if existente:
         conn.close()
         return existente[1]
     hc = generar_siguiente_hc()
     edad = calcular_edad(fecha_nac) if fecha_nac else 0
-    cur.execute("""INSERT INTO pacientes (historia_clinica, dni, nombre, apellido, fecha_nacimiento, telefono, celular, direccion, sexo, edad, nro_afiliacion, deleted)
+    ejecutar_consulta(cur, """INSERT INTO pacientes (historia_clinica, dni, nombre, apellido, fecha_nacimiento, telefono, celular, direccion, sexo, edad, nro_afiliacion, deleted)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,0)""",
                 (hc, dni, nombre, apellido, fecha_nac, telefono, celular, direccion, sexo, edad, nro_afiliacion))
     conn.commit()
@@ -486,7 +497,7 @@ def crear_paciente_sistema(dni, nombre, apellido, fecha_nac='', telefono='', cel
 def obtener_paciente_por_dni(dni):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, historia_clinica, nombre, apellido, fecha_nacimiento, edad, nro_afiliacion FROM pacientes WHERE dni=? AND deleted=0", (dni,))
+    ejecutar_consulta(cur, "SELECT id, historia_clinica, nombre, apellido, fecha_nacimiento, edad, nro_afiliacion FROM pacientes WHERE dni=? AND deleted=0", (dni,))
     row = cur.fetchone()
     conn.close()
     if row:
@@ -499,9 +510,9 @@ def generar_codigo_muestra():
     conn = get_db_connection()
     cur = conn.cursor()
     if IS_POSTGRES:
-        cur.execute("SELECT COUNT(*) FROM ordenes_laboratorio WHERE fecha_validez = %s", (hoy,))
+        ejecutar_consulta(cur, "SELECT COUNT(*) FROM ordenes_laboratorio WHERE fecha_validez = %s", (hoy,))
     else:
-        cur.execute("SELECT COUNT(*) FROM ordenes_laboratorio WHERE fecha_validez = ?", (hoy,))
+        ejecutar_consulta(cur, "SELECT COUNT(*) FROM ordenes_laboratorio WHERE fecha_validez = ?", (hoy,))
     count = cur.fetchone()[0] + 1
     conn.close()
     return f"MUESTRA-{fecha}-{count:04d}"
@@ -509,7 +520,7 @@ def generar_codigo_muestra():
 def generar_pdf_boleta(id_pago):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("""SELECT p.id, p.numero_boleta, p.monto, p.fecha_pago, p.descripcion, pa.nombre, pa.apellido, pa.dni, pa.historia_clinica, c.fecha_cita
+    ejecutar_consulta(cur, """SELECT p.id, p.numero_boleta, p.monto, p.fecha_pago, p.descripcion, pa.nombre, pa.apellido, pa.dni, pa.historia_clinica, c.fecha_cita
                    FROM pagos p LEFT JOIN pacientes pa ON p.id_paciente = pa.id LEFT JOIN citas c ON p.id_cita = c.id WHERE p.id = ?""", (id_pago,))
     row = cur.fetchone()
     conn.close()
@@ -557,7 +568,7 @@ def generar_codigo_barras(codigo):
 def paciente_tiene_pagos(id_paciente):
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM pagos WHERE id_paciente=? AND estado='Pagado'", (id_paciente,))
+    ejecutar_consulta(cur, "SELECT COUNT(*) FROM pagos WHERE id_paciente=? AND estado='Pagado'", (id_paciente,))
     count = cur.fetchone()[0]
     conn.close()
     return count > 0
@@ -655,18 +666,21 @@ LAYOUT_BASE = """
 @app.route('/')
 def index():
     return redirect(url_for('login' if not session.get('usuario') else 'dashboard'))
-def ejecutar_consulta(cursor, query, params):
-    """Ejecuta una consulta reemplazando ? por %s si es PostgreSQL."""
-    if IS_POSTGRES:
-        # Reemplazar ? por %s
-        query = query.replace('?', '%s')
-    cursor.execute(query, params)
-if IS_POSTGRES:
-    ejecutar_consulta(cur, "SELECT ... WHERE usuario=?", (user,))
-else:
-    cur.execute("SELECT id, rol, password_hash FROM usuarios WHERE usuario=?", (user,))
-else:
-    cur.execute("SELECT id, rol, password_hash FROM usuarios WHERE usuario=?", (user,))
+
+@app.route('/login', methods=['GET','POST'])
+def login():
+    if session.get('usuario'):
+        return redirect(url_for('dashboard'))
+    if request.method == 'POST':
+        user = request.form['usuario']
+        pwd = request.form['password']
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # Usar ejecutar_consulta para adaptar placeholders
+        if IS_POSTGRES:
+            ejecutar_consulta(cur, "SELECT id, rol, password_hash FROM usuarios WHERE usuario=%s", (user,))
+        else:
+            ejecutar_consulta(cur, "SELECT id, rol, password_hash FROM usuarios WHERE usuario=?", (user,))
         data = cur.fetchone()
         conn.close()
         if data and check_password_hash(data[2], pwd):
@@ -702,13 +716,13 @@ def dashboard():
     conn = get_db_connection()
     cur = conn.cursor()
     hoy = date.today().isoformat()
-    cur.execute("SELECT COUNT(*) FROM citas WHERE fecha_cita LIKE ?", (hoy+'%',))
+    ejecutar_consulta(cur, "SELECT COUNT(*) FROM citas WHERE fecha_cita LIKE ?", (hoy+'%',))
     citas_hoy = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM pacientes WHERE deleted=0")
+    ejecutar_consulta(cur, "SELECT COUNT(*) FROM pacientes WHERE deleted=0")
     total_pacientes = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM ordenes_laboratorio WHERE estado='Pendiente'")
+    ejecutar_consulta(cur, "SELECT COUNT(*) FROM ordenes_laboratorio WHERE estado='Pendiente'")
     pendientes_lab = cur.fetchone()[0]
-    cur.execute("SELECT COALESCE(SUM(monto),0) FROM pagos WHERE fecha_pago LIKE ? AND estado='Pagado'", (hoy+'%',))
+    ejecutar_consulta(cur, "SELECT COALESCE(SUM(monto),0) FROM pagos WHERE fecha_pago LIKE ? AND estado='Pagado'", (hoy+'%',))
     ingresos_hoy = float(cur.fetchone()[0])
     conn.close()
     contenido = """
@@ -750,23 +764,23 @@ def reportes():
     ultimo_dia = monthrange(year, month)[1]
     mes_inicio = f'{year:04d}-{month:02d}-01'
     mes_fin = f'{year:04d}-{month:02d}-{ultimo_dia:02d}'
-    cur.execute("SELECT COUNT(*) FROM citas WHERE date(fecha_cita)=?", (fecha,))
+    ejecutar_consulta(cur, "SELECT COUNT(*) FROM citas WHERE date(fecha_cita)=?", (fecha,))
     total_citas_dia = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM citas WHERE date(fecha_cita)=? AND estado='Pagado'", (fecha,))
+    ejecutar_consulta(cur, "SELECT COUNT(*) FROM citas WHERE date(fecha_cita)=? AND estado='Pagado'", (fecha,))
     citas_pagadas_dia = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM citas c LEFT JOIN diagnosticos d ON d.id_cita = c.id WHERE date(c.fecha_cita)=? AND d.id IS NOT NULL", (fecha,))
+    ejecutar_consulta(cur, "SELECT COUNT(*) FROM citas c LEFT JOIN diagnosticos d ON d.id_cita = c.id WHERE date(c.fecha_cita)=? AND d.id IS NOT NULL", (fecha,))
     atenciones_dia = cur.fetchone()[0]
-    cur.execute("SELECT COALESCE(SUM(monto),0) FROM pagos WHERE estado='Pagado' AND date(fecha_pago)=?", (fecha,))
+    ejecutar_consulta(cur, "SELECT COALESCE(SUM(monto),0) FROM pagos WHERE estado='Pagado' AND date(fecha_pago)=?", (fecha,))
     ingresos_dia = float(cur.fetchone()[0] or 0)
-    cur.execute("SELECT COUNT(*) FROM citas WHERE date(fecha_cita) BETWEEN ? AND ?", (mes_inicio, mes_fin))
+    ejecutar_consulta(cur, "SELECT COUNT(*) FROM citas WHERE date(fecha_cita) BETWEEN ? AND ?", (mes_inicio, mes_fin))
     total_citas_mes = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM citas WHERE date(fecha_cita) BETWEEN ? AND ? AND estado='Pagado'", (mes_inicio, mes_fin))
+    ejecutar_consulta(cur, "SELECT COUNT(*) FROM citas WHERE date(fecha_cita) BETWEEN ? AND ? AND estado='Pagado'", (mes_inicio, mes_fin))
     citas_pagadas_mes = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM citas c LEFT JOIN diagnosticos d ON d.id_cita = c.id WHERE date(c.fecha_cita) BETWEEN ? AND ? AND d.id IS NOT NULL", (mes_inicio, mes_fin))
+    ejecutar_consulta(cur, "SELECT COUNT(*) FROM citas c LEFT JOIN diagnosticos d ON d.id_cita = c.id WHERE date(c.fecha_cita) BETWEEN ? AND ? AND d.id IS NOT NULL", (mes_inicio, mes_fin))
     atenciones_mes = cur.fetchone()[0]
-    cur.execute("SELECT COALESCE(SUM(monto),0) FROM pagos WHERE estado='Pagado' AND date(fecha_pago) BETWEEN ? AND ?", (mes_inicio, mes_fin))
+    ejecutar_consulta(cur, "SELECT COALESCE(SUM(monto),0) FROM pagos WHERE estado='Pagado' AND date(fecha_pago) BETWEEN ? AND ?", (mes_inicio, mes_fin))
     ingresos_mes = float(cur.fetchone()[0] or 0)
-    cur.execute("""
+    ejecutar_consulta(cur, """
         SELECT m.id, m.nombre || ' ' || m.apellido AS medico,
                COUNT(DISTINCT d.id) AS atenciones,
                COUNT(DISTINCT c.id) AS citas_asignadas
@@ -832,13 +846,13 @@ def admision():
 
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, historia_clinica, dni, nombre, apellido FROM pacientes WHERE deleted=0 ORDER BY id DESC")
+    ejecutar_consulta(cur, "SELECT id, historia_clinica, dni, nombre, apellido FROM pacientes WHERE deleted=0 ORDER BY id DESC")
     pacientes = cur.fetchall()
-    cur.execute("SELECT id, nombre FROM servicios")
+    ejecutar_consulta(cur, "SELECT id, nombre FROM servicios")
     servicios = cur.fetchall()
-    cur.execute("SELECT id, nombre || ' ' || apellido AS nombre_completo FROM medicos WHERE activo=1 ORDER BY nombre")
+    ejecutar_consulta(cur, "SELECT id, nombre || ' ' || apellido AS nombre_completo FROM medicos WHERE activo=1 ORDER BY nombre")
     medicos = cur.fetchall()
-    cur.execute("""SELECT c.id, p.historia_clinica, p.nombre, p.apellido, s.nombre, c.fecha_cita, c.estado, c.tipo_asegurado, c.numero_boleta
+    ejecutar_consulta(cur, """SELECT c.id, p.historia_clinica, p.nombre, p.apellido, s.nombre, c.fecha_cita, c.estado, c.tipo_asegurado, c.numero_boleta
                    FROM citas c JOIN pacientes p ON c.id_paciente = p.id JOIN servicios s ON c.id_servicio = s.id WHERE p.deleted=0 ORDER BY c.fecha_cita DESC""")
     citas = cur.fetchall()
     conn.close()
@@ -907,7 +921,7 @@ def crear_cita():
     conn = get_db_connection()
     cur = conn.cursor()
     estado = 'Pagado' if tipo in ['SIS','SOAT'] else 'Pendiente'
-    cur.execute("INSERT INTO citas (id_paciente, id_servicio, id_medico, fecha_cita, estado, motivo_consulta, tipo_asegurado, numero_boleta) VALUES (?,?,?,?,?,?,?,?)",
+    ejecutar_consulta(cur, "INSERT INTO citas (id_paciente, id_servicio, id_medico, fecha_cita, estado, motivo_consulta, tipo_asegurado, numero_boleta) VALUES (?,?,?,?,?,?,?,?)",
                 (id_pac, id_serv, id_med, fecha_hora, estado, motivo, tipo, ''))
     conn.commit()
     conn.close()
@@ -919,7 +933,7 @@ def imprimir_ficha_admision(id_cita):
         return redirect(url_for('dashboard'))
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("""SELECT p.nombre, p.apellido, p.dni, p.edad, p.sexo, p.historia_clinica, s.nombre, m.nombre||' '||m.apellido, c.fecha_cita, c.tipo_asegurado, c.numero_boleta
+    ejecutar_consulta(cur, """SELECT p.nombre, p.apellido, p.dni, p.edad, p.sexo, p.historia_clinica, s.nombre, m.nombre||' '||m.apellido, c.fecha_cita, c.tipo_asegurado, c.numero_boleta
                    FROM citas c JOIN pacientes p ON c.id_paciente=p.id JOIN servicios s ON c.id_servicio=s.id JOIN medicos m ON c.id_medico=m.id WHERE c.id=?""", (id_cita,))
     data = cur.fetchone()
     conn.close()
@@ -972,13 +986,13 @@ def editar_paciente_admision(id_paciente):
         sexo = request.form.get('sexo', '')
         nro_af = request.form.get('nro_afiliacion', '')
         edad = calcular_edad(fecha_nac) if fecha_nac else 0
-        cur.execute("""UPDATE pacientes SET nombre=?, apellido=?, dni=?, fecha_nacimiento=?, telefono=?, celular=?, direccion=?, sexo=?, edad=?, nro_afiliacion=? WHERE id=?""",
+        ejecutar_consulta(cur, """UPDATE pacientes SET nombre=?, apellido=?, dni=?, fecha_nacimiento=?, telefono=?, celular=?, direccion=?, sexo=?, edad=?, nro_afiliacion=? WHERE id=?""",
                     (nombre, apellido, dni, fecha_nac, telefono, celular, direccion, sexo, edad, nro_af, id_paciente))
         conn.commit()
         conn.close()
         flash('Paciente actualizado.', 'success')
         return redirect(url_for('admision'))
-    cur.execute("SELECT id, nombre, apellido, dni, fecha_nacimiento, telefono, celular, direccion, sexo, nro_afiliacion FROM pacientes WHERE id=?", (id_paciente,))
+    ejecutar_consulta(cur, "SELECT id, nombre, apellido, dni, fecha_nacimiento, telefono, celular, direccion, sexo, nro_afiliacion FROM pacientes WHERE id=?", (id_paciente,))
     p = cur.fetchone()
     conn.close()
     if not p: return "Paciente no encontrado", 404
@@ -1038,7 +1052,7 @@ def caja():
                     monto_total = 0.0
                     examenes_validos = []
                     for id_examen in id_examenes:
-                        cur.execute("SELECT descripcion, precio FROM examenes_catalogo WHERE id=?", (id_examen,))
+                        ejecutar_consulta(cur, "SELECT descripcion, precio FROM examenes_catalogo WHERE id=?", (id_examen,))
                         examen = cur.fetchone()
                         if not examen:
                             continue
@@ -1051,20 +1065,20 @@ def caja():
                     fecha_emision = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     descripcion_final = f"{'Laboratorio' if tipo_item == 'laboratorio' else 'Análisis'}: {', '.join(detalle_examenes)}"
                     numero_boleta = generar_siguiente_boleta()
-                    cur.execute("""
+                    ejecutar_consulta(cur, """
                         INSERT INTO pagos (id_cita, id_paciente, numero_boleta, monto, fecha_pago, estado, descripcion)
                         VALUES (?, ?, ?, ?, ?, 'Pagado', ?)
                     """, (None, id_paciente, numero_boleta, monto_final, fecha_emision, descripcion or descripcion_final))
                     id_pago = cur.lastrowid
                     for id_examen, _, precio_examen in examenes_validos:
-                        cur.execute("""
+                        ejecutar_consulta(cur, """
                             INSERT INTO ordenes_laboratorio (id_paciente, id_examen, fecha_emision, estado, precio, id_pago)
                             VALUES (?, ?, ?, 'Pendiente', ?, ?)
                         """, (id_paciente, id_examen, fecha_emision, precio_examen, id_pago))
                     id_cita = None
                 else:
                     id_servicio = request.form.get('id_servicio')
-                    cur.execute("SELECT nombre, precio_base FROM servicios WHERE id=?", (id_servicio,))
+                    ejecutar_consulta(cur, "SELECT nombre, precio_base FROM servicios WHERE id=?", (id_servicio,))
                     servicio = cur.fetchone()
                     if not servicio:
                         raise ValueError('Seleccione un servicio válido.')
@@ -1072,14 +1086,14 @@ def caja():
                     descripcion_final = f"Servicio: {servicio[0]}"
                     if tipo_item == 'atencion':
                         descripcion_final = f"Atención: {servicio[0]}"
-                    cur.execute("""
+                    ejecutar_consulta(cur, """
                         INSERT INTO citas (id_paciente, id_servicio, fecha_cita, estado, tipo_asegurado, numero_boleta)
                         VALUES (?, ?, ?, 'Pagado', 'Demanda', ?)
                     """, (id_paciente, id_servicio, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), ''))
                     id_cita = cur.lastrowid
                 if tipo_item not in ('laboratorio', 'analisis'):
                     numero_boleta = generar_siguiente_boleta()
-                    cur.execute("""
+                    ejecutar_consulta(cur, """
                         INSERT INTO pagos (id_cita, id_paciente, numero_boleta, monto, fecha_pago, estado, descripcion)
                         VALUES (?, ?, ?, ?, ?, 'Pagado', ?)
                     """, (id_cita, id_paciente, numero_boleta, monto_final, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), descripcion or descripcion_final))
@@ -1091,20 +1105,20 @@ def caja():
                 flash(f"Error al registrar el cobro: {str(e)}", 'danger')
             return redirect(url_for('caja'))
 
-    cur.execute("""SELECT c.id, p.nombre, p.apellido, s.nombre, c.fecha_cita, c.estado, s.precio_base, c.id_paciente
+    ejecutar_consulta(cur, """SELECT c.id, p.nombre, p.apellido, s.nombre, c.fecha_cita, c.estado, s.precio_base, c.id_paciente
                    FROM citas c JOIN pacientes p ON c.id_paciente = p.id JOIN servicios s ON c.id_servicio = s.id
                    WHERE c.estado='Pendiente' AND c.tipo_asegurado='Demanda' AND p.deleted=0 ORDER BY c.fecha_cita ASC""")
     pendientes = cur.fetchall()
-    cur.execute("""SELECT p.id, p.numero_boleta, p.monto, p.fecha_pago, p.descripcion, pa.nombre, pa.apellido, pa.dni
+    ejecutar_consulta(cur, """SELECT p.id, p.numero_boleta, p.monto, p.fecha_pago, p.descripcion, pa.nombre, pa.apellido, pa.dni
                    FROM pagos p JOIN pacientes pa ON p.id_paciente = pa.id WHERE pa.deleted=0 ORDER BY p.fecha_pago DESC""")
     historial = cur.fetchall()
-    cur.execute("SELECT id, historia_clinica, dni, nombre, apellido FROM pacientes WHERE deleted=0 ORDER BY id DESC")
+    ejecutar_consulta(cur, "SELECT id, historia_clinica, dni, nombre, apellido FROM pacientes WHERE deleted=0 ORDER BY id DESC")
     pacientes = cur.fetchall()
-    cur.execute("SELECT id, nombre, precio_base FROM servicios ORDER BY id")
+    ejecutar_consulta(cur, "SELECT id, nombre, precio_base FROM servicios ORDER BY id")
     servicios = cur.fetchall()
-    cur.execute("SELECT id, descripcion, precio FROM examenes_catalogo ORDER BY id")
+    ejecutar_consulta(cur, "SELECT id, descripcion, precio FROM examenes_catalogo ORDER BY id")
     examenes = cur.fetchall()
-    cur.execute("""SELECT id_paciente, descripcion, numero_boleta, monto, fecha_pago FROM pagos
+    ejecutar_consulta(cur, """SELECT id_paciente, descripcion, numero_boleta, monto, fecha_pago FROM pagos
                    WHERE estado='Pagado' AND (LOWER(descripcion) LIKE 'laboratorio:%' OR LOWER(descripcion) LIKE 'análisis:%' OR LOWER(descripcion) LIKE 'analisis:%')
                    ORDER BY fecha_pago DESC""")
     pagos_examenes = cur.fetchall()
@@ -1181,7 +1195,7 @@ def generar_boleta(id_cita):
         return redirect(url_for('dashboard'))
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT s.precio_base, c.id_paciente FROM citas c JOIN servicios s ON c.id_servicio = s.id WHERE c.id=?", (id_cita,))
+    ejecutar_consulta(cur, "SELECT s.precio_base, c.id_paciente FROM citas c JOIN servicios s ON c.id_servicio = s.id WHERE c.id=?", (id_cita,))
     row = cur.fetchone()
     if not row:
         conn.close()
@@ -1190,9 +1204,9 @@ def generar_boleta(id_cita):
     id_paciente = row[1]
     numero_boleta = generar_siguiente_boleta()
     descripcion = "Consulta médica"
-    cur.execute("INSERT INTO pagos (id_cita, id_paciente, numero_boleta, monto, fecha_pago, estado, descripcion) VALUES (?,?,?,?,?, 'Pagado', ?)",
+    ejecutar_consulta(cur, "INSERT INTO pagos (id_cita, id_paciente, numero_boleta, monto, fecha_pago, estado, descripcion) VALUES (?,?,?,?,?, 'Pagado', ?)",
                 (id_cita, id_paciente, numero_boleta, monto, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), descripcion))
-    cur.execute("UPDATE citas SET estado='Pagado', numero_boleta=? WHERE id=?", (numero_boleta, id_cita))
+    ejecutar_consulta(cur, "UPDATE citas SET estado='Pagado', numero_boleta=? WHERE id=?", (numero_boleta, id_cita))
     conn.commit()
     conn.close()
     return redirect(url_for('caja'))
@@ -1242,7 +1256,7 @@ def laboratorio():
             apellido = request.form['apellido']
             dni = request.form['dni']
             try:
-                cur.execute("UPDATE pacientes SET nombre=?, apellido=?, dni=? WHERE id=?", (nombre, apellido, dni, id_pac))
+                ejecutar_consulta(cur, "UPDATE pacientes SET nombre=?, apellido=?, dni=? WHERE id=?", (nombre, apellido, dni, id_pac))
                 conn.commit()
                 flash("Paciente actualizado.", 'success')
             except Exception as e:
@@ -1253,12 +1267,12 @@ def laboratorio():
             if paciente_tiene_pagos(id_pac):
                 flash('Paciente con pagos. Use autorización.', 'danger')
                 return redirect(url_for('laboratorio'))
-            cur.execute("SELECT COUNT(*) FROM ordenes_laboratorio o JOIN resultados_lab r ON r.id_orden = o.id WHERE o.id_paciente=?", (id_pac,))
+            ejecutar_consulta(cur, "SELECT COUNT(*) FROM ordenes_laboratorio o JOIN resultados_lab r ON r.id_orden = o.id WHERE o.id_paciente=?", (id_pac,))
             tiene = cur.fetchone()[0] > 0
             if tiene:
                 flash("Tiene resultados de laboratorio.", 'danger')
             else:
-                cur.execute("UPDATE pacientes SET deleted=1 WHERE id=?", (id_pac,))
+                ejecutar_consulta(cur, "UPDATE pacientes SET deleted=1 WHERE id=?", (id_pac,))
                 conn.commit()
                 flash("Paciente eliminado.", 'success')
             return redirect(url_for('laboratorio'))
@@ -1280,9 +1294,9 @@ def laboratorio():
             os.makedirs('static/autorizaciones_eliminacion', exist_ok=True)
             archivo.save(os.path.join('static/autorizaciones_eliminacion', filename))
             usuario = session.get('usuario')
-            cur.execute("INSERT INTO autorizaciones_eliminacion (id_paciente, usuario_autoriza, archivo_pdf, motivo) VALUES (?,?,?,?)",
+            ejecutar_consulta(cur, "INSERT INTO autorizaciones_eliminacion (id_paciente, usuario_autoriza, archivo_pdf, motivo) VALUES (?,?,?,?)",
                         (id_pac, usuario, f"autorizaciones_eliminacion/{filename}", motivo))
-            cur.execute("UPDATE pacientes SET deleted=1 WHERE id=?", (id_pac,))
+            ejecutar_consulta(cur, "UPDATE pacientes SET deleted=1 WHERE id=?", (id_pac,))
             conn.commit()
             flash(f'Paciente eliminado con autorización.', 'success')
             return redirect(url_for('laboratorio'))
@@ -1298,7 +1312,7 @@ def laboratorio():
                 id_examen = request.form.get('id_examen')
                 examen_manual = request.form.get('examen_manual', '').strip()
                 if id_examen:
-                    cur.execute("SELECT precio FROM examenes_catalogo WHERE id=?", (id_examen,))
+                    ejecutar_consulta(cur, "SELECT precio FROM examenes_catalogo WHERE id=?", (id_examen,))
                     row = cur.fetchone()
                     precio = float(row[0]) if row else 0.0
                 elif examen_manual:
@@ -1306,7 +1320,7 @@ def laboratorio():
                 else:
                     flash("Seleccione examen o ingrese manual.", 'danger')
                     return redirect(url_for('laboratorio'))
-                cur.execute("""INSERT INTO ordenes_laboratorio (id_paciente, id_examen, examen_manual, fecha_emision, estado, precio, codigo_muestra, fecha_validez, tipo_orden)
+                ejecutar_consulta(cur, """INSERT INTO ordenes_laboratorio (id_paciente, id_examen, examen_manual, fecha_emision, estado, precio, codigo_muestra, fecha_validez, tipo_orden)
                                VALUES (?,?,?,?,?,?,?,?,?)""",
                             (id_paciente, id_examen if id_examen else None, examen_manual,
                              datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'Pendiente', precio,
@@ -1319,7 +1333,7 @@ def laboratorio():
                     flash("Ingrese nombre del servicio.", 'danger')
                     return redirect(url_for('laboratorio'))
                 precio = float(request.form.get('precio_servicio', 0))
-                cur.execute("""INSERT INTO ordenes_laboratorio (id_paciente, servicio_manual, fecha_emision, estado, precio, codigo_muestra, fecha_validez, tipo_orden)
+                ejecutar_consulta(cur, """INSERT INTO ordenes_laboratorio (id_paciente, servicio_manual, fecha_emision, estado, precio, codigo_muestra, fecha_validez, tipo_orden)
                                VALUES (?,?,?,?,?,?,?,?)""",
                             (id_paciente, servicio_manual, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                              'Pendiente', precio, codigo_muestra, fecha_validez, 'servicio'))
@@ -1328,9 +1342,9 @@ def laboratorio():
             conn.close()
             return redirect(url_for('laboratorio'))
 
-    cur.execute("SELECT id, historia_clinica, dni, nombre, apellido FROM pacientes WHERE deleted=0 ORDER BY id DESC")
+    ejecutar_consulta(cur, "SELECT id, historia_clinica, dni, nombre, apellido FROM pacientes WHERE deleted=0 ORDER BY id DESC")
     pacientes = cur.fetchall()
-    cur.execute("SELECT id, descripcion, precio FROM examenes_catalogo")
+    ejecutar_consulta(cur, "SELECT id, descripcion, precio FROM examenes_catalogo")
     examenes = cur.fetchall()
     # Pendientes (sin filtro de fecha)
     sql_pend = """SELECT o.id, p.nombre, p.apellido, COALESCE(e.descripcion, o.examen_manual, o.servicio_manual) AS descripcion,
@@ -1342,7 +1356,7 @@ def laboratorio():
                   WHERE o.estado='Pendiente' ORDER BY o.id DESC"""
     if IS_POSTGRES:
         sql_pend = sql_pend.replace('?', '%s')
-    cur.execute(sql_pend)
+    ejecutar_consulta(cur, sql_pend)
     pendientes_muestra = cur.fetchall()
 
     sql_proceso = """SELECT o.id, p.nombre, p.apellido, COALESCE(e.descripcion, o.examen_manual, o.servicio_manual) AS descripcion,
@@ -1357,7 +1371,7 @@ def laboratorio():
                   WHERE o.estado != 'Pendiente' ORDER BY o.id DESC"""
     if IS_POSTGRES:
         sql_proceso = sql_proceso.replace('?', '%s')
-    cur.execute(sql_proceso)
+    ejecutar_consulta(cur, sql_proceso)
     ordenes_proceso = cur.fetchall()
     conn.close()
 
@@ -1410,7 +1424,7 @@ def tomar_muestra(id_orden):
         return redirect(url_for('dashboard'))
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("UPDATE ordenes_laboratorio SET estado='Muestra Tomada' WHERE id=?", (id_orden,))
+    ejecutar_consulta(cur, "UPDATE ordenes_laboratorio SET estado='Muestra Tomada' WHERE id=?", (id_orden,))
     conn.commit()
     conn.close()
     return redirect(url_for('laboratorio'))
@@ -1421,7 +1435,7 @@ def ingresar_resultado(id_orden):
         return redirect(url_for('dashboard'))
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("""SELECT o.id, p.nombre, p.apellido, e.descripcion, e.id as id_examen_cat, o.examen_manual, o.servicio_manual, o.tecnologo_id, o.fecha_resultado, o.validado
+    ejecutar_consulta(cur, """SELECT o.id, p.nombre, p.apellido, e.descripcion, e.id as id_examen_cat, o.examen_manual, o.servicio_manual, o.tecnologo_id, o.fecha_resultado, o.validado
                    FROM ordenes_laboratorio o JOIN pacientes p ON o.id_paciente=p.id LEFT JOIN examenes_catalogo e ON o.id_examen=e.id WHERE o.id=?""", (id_orden,))
     orden = cur.fetchone()
     if not orden: return "Orden no encontrada", 404
@@ -1429,15 +1443,15 @@ def ingresar_resultado(id_orden):
     if request.method == 'POST':
         if es_manual:
             res = request.form.get('resultado_general', '')
-            cur.execute("INSERT INTO resultados_lab (id_orden, id_parametro, resultado) VALUES (?,NULL,?)", (id_orden, res))
+            ejecutar_consulta(cur, "INSERT INTO resultados_lab (id_orden, id_parametro, resultado) VALUES (?,NULL,?)", (id_orden, res))
         else:
-            cur.execute("SELECT id FROM examenes_parametros WHERE id_examen_catalogo=?", (orden[4],))
+            ejecutar_consulta(cur, "SELECT id FROM examenes_parametros WHERE id_examen_catalogo=?", (orden[4],))
             params = cur.fetchall()
             for p in params:
                 val = request.form.get(f'param_{p[0]}', '')
-                cur.execute("INSERT OR REPLACE INTO resultados_lab (id_orden, id_parametro, resultado) VALUES (?,?,?)", (id_orden, p[0], val))
+                ejecutar_consulta(cur, "INSERT OR REPLACE INTO resultados_lab (id_orden, id_parametro, resultado) VALUES (?,?,?)", (id_orden, p[0], val))
         ahora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        cur.execute("UPDATE ordenes_laboratorio SET estado='Completado', tecnologo_id=?, fecha_resultado=?, validado=? WHERE id=?", 
+        ejecutar_consulta(cur, "UPDATE ordenes_laboratorio SET estado='Completado', tecnologo_id=?, fecha_resultado=?, validado=? WHERE id=?", 
                     (session.get('id_usuario'), ahora, 1 if session.get('rol')=='tecnologo' else 0, id_orden))
         conn.commit()
         conn.close()
@@ -1451,8 +1465,7 @@ def ingresar_resultado(id_orden):
         <form method="POST"><div class="mb-3"><label>Resultado general</label><textarea name="resultado_general" class="form-control" rows="4"></textarea></div><button class="btn btn-success">Guardar</button><a href="{{ url_for('laboratorio') }}" class="btn btn-danger">Cancelar</a></form>
         """
     else:
-        cur = conn.cursor()
-        cur.execute("SELECT id, nombre_parametro, unidad, rango_referencia FROM examenes_parametros WHERE id_examen_catalogo=? ORDER BY orden", (orden[4],))
+        ejecutar_consulta(cur, "SELECT id, nombre_parametro, unidad, rango_referencia FROM examenes_parametros WHERE id_examen_catalogo=? ORDER BY orden", (orden[4],))
         params = cur.fetchall()
         conn.close()
         contenido = """
@@ -1472,12 +1485,12 @@ def imprimir_resultado_lab(id_orden):
         return redirect(url_for('dashboard'))
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("""SELECT p.nombre, p.apellido, p.dni, COALESCE(e.descripcion, o.examen_manual, o.servicio_manual) AS descripcion,
+    ejecutar_consulta(cur, """SELECT p.nombre, p.apellido, p.dni, COALESCE(e.descripcion, o.examen_manual, o.servicio_manual) AS descripcion,
                    o.fecha_emision, p.edad, p.sexo, o.fecha_resultado, o.validado, o.tecnologo_id, u.usuario AS tecnologo_nombre
                    FROM ordenes_laboratorio o JOIN pacientes p ON o.id_paciente=p.id LEFT JOIN examenes_catalogo e ON o.id_examen=e.id LEFT JOIN usuarios u ON o.tecnologo_id=u.id WHERE o.id=?""", (id_orden,))
     orden_data = cur.fetchone()
     if not orden_data: return "Orden no encontrada", 404
-    cur.execute("""SELECT ep.nombre_parametro, ep.unidad, ep.rango_referencia, rl.resultado
+    ejecutar_consulta(cur, """SELECT ep.nombre_parametro, ep.unidad, ep.rango_referencia, rl.resultado
                    FROM resultados_lab rl LEFT JOIN examenes_parametros ep ON rl.id_parametro=ep.id
                    WHERE rl.id_orden=? ORDER BY ep.orden ASC""", (id_orden,))
     resultados = cur.fetchall()
@@ -1485,7 +1498,7 @@ def imprimir_resultado_lab(id_orden):
     if not resultados:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT resultado FROM resultados_lab WHERE id_orden=? AND id_parametro IS NULL", (id_orden,))
+        ejecutar_consulta(cur, "SELECT resultado FROM resultados_lab WHERE id_orden=? AND id_parametro IS NULL", (id_orden,))
         row = cur.fetchone()
         conn.close()
         if row:
@@ -1549,7 +1562,7 @@ def imprimir_etiqueta(id_orden):
         return redirect(url_for('dashboard'))
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT o.codigo_muestra, o.fecha_validez, p.nombre, p.apellido, p.historia_clinica FROM ordenes_laboratorio o JOIN pacientes p ON o.id_paciente=p.id WHERE o.id=?", (id_orden,))
+    ejecutar_consulta(cur, "SELECT o.codigo_muestra, o.fecha_validez, p.nombre, p.apellido, p.historia_clinica FROM ordenes_laboratorio o JOIN pacientes p ON o.id_paciente=p.id WHERE o.id=?", (id_orden,))
     orden = cur.fetchone()
     conn.close()
     if not orden: return "Orden no encontrada", 404
@@ -1592,7 +1605,7 @@ def atencion_medica():
         # Para simplificar, no filtramos, mostramos todas las citas pagadas.
         pass
     sql += " ORDER BY c.fecha_cita DESC"
-    cur.execute(sql, params)
+    ejecutar_consulta(cur, sql, params)
     citas = cur.fetchall()
     conn.close()
     contenido = """
@@ -1616,18 +1629,18 @@ def atender_cita(id_cita):
         trat = request.form['tratamiento']
         desc = int(request.form['descanso'])
         # Obtener id_medico de la cita
-        cur.execute("SELECT id_medico FROM citas WHERE id=?", (id_cita,))
+        ejecutar_consulta(cur, "SELECT id_medico FROM citas WHERE id=?", (id_cita,))
         id_med = cur.fetchone()[0]
-        cur.execute("INSERT INTO diagnosticos (id_cita, id_medico, diagnostico, tratamiento, descanso_medico_dias, informe_pdf_path) VALUES (?,?,?,?,?,?)",
+        ejecutar_consulta(cur, "INSERT INTO diagnosticos (id_cita, id_medico, diagnostico, tratamiento, descanso_medico_dias, informe_pdf_path) VALUES (?,?,?,?,?,?)",
                     (id_cita, id_med, diag, trat, desc, ''))
         conn.commit()
         generar_y_guardar_informe_pdf(id_cita)
         conn.close()
         flash("Atención registrada. Cree la receta.", 'success')
         return redirect(url_for('nueva_receta', id_cita=id_cita))
-    cur.execute("SELECT p.nombre, p.apellido, p.dni, s.nombre, c.fecha_cita FROM citas c JOIN pacientes p ON c.id_paciente=p.id JOIN servicios s ON c.id_servicio=s.id WHERE c.id=?", (id_cita,))
+    ejecutar_consulta(cur, "SELECT p.nombre, p.apellido, p.dni, s.nombre, c.fecha_cita FROM citas c JOIN pacientes p ON c.id_paciente=p.id JOIN servicios s ON c.id_servicio=s.id WHERE c.id=?", (id_cita,))
     cita = cur.fetchone()
-    cur.execute("""SELECT e.descripcion, CASE WHEN EXISTS (SELECT 1 FROM resultados_lab rl WHERE rl.id_orden=o.id) THEN 'Con resultados' ELSE 'Pendiente' END AS res, o.id, o.estado
+    ejecutar_consulta(cur, """SELECT e.descripcion, CASE WHEN EXISTS (SELECT 1 FROM resultados_lab rl WHERE rl.id_orden=o.id) THEN 'Con resultados' ELSE 'Pendiente' END AS res, o.id, o.estado
                    FROM ordenes_laboratorio o JOIN examenes_catalogo e ON o.id_examen=e.id WHERE o.id_cita=?""", (id_cita,))
     lab_results = cur.fetchall()
     conn.close()
@@ -1647,10 +1660,10 @@ def generar_y_guardar_informe_pdf(id_cita):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("""SELECT p.nombre, p.apellido, p.dni, s.nombre, m.nombre||' '||m.apellido, c.fecha_cita
+        ejecutar_consulta(cur, """SELECT p.nombre, p.apellido, p.dni, s.nombre, m.nombre||' '||m.apellido, c.fecha_cita
                        FROM citas c JOIN pacientes p ON c.id_paciente=p.id JOIN servicios s ON c.id_servicio=s.id JOIN medicos m ON c.id_medico=m.id WHERE c.id=?""", (id_cita,))
         cita = cur.fetchone()
-        cur.execute("SELECT diagnostico, tratamiento, descanso_medico_dias FROM diagnosticos WHERE id_cita=?", (id_cita,))
+        ejecutar_consulta(cur, "SELECT diagnostico, tratamiento, descanso_medico_dias FROM diagnosticos WHERE id_cita=?", (id_cita,))
         diag = cur.fetchone()
         conn.close()
         if not cita or not diag: return
@@ -1688,7 +1701,7 @@ def generar_y_guardar_informe_pdf(id_cita):
         filename=f"informe_{id_cita}.pdf"
         with open(os.path.join('static/informes_medicos', filename), 'wb') as f: f.write(buf.getvalue())
         conn=get_db_connection(); cur=conn.cursor()
-        cur.execute("UPDATE diagnosticos SET informe_pdf_path=? WHERE id_cita=?", (f"informes_medicos/{filename}", id_cita))
+        ejecutar_consulta(cur, "UPDATE diagnosticos SET informe_pdf_path=? WHERE id_cita=?", (f"informes_medicos/{filename}", id_cita))
         conn.commit(); conn.close()
     except Exception as e:
         app.logger.error(f"Error en informe: {e}")
@@ -1703,13 +1716,13 @@ def editar_informe(id_cita):
         diag = request.form['diagnostico']
         trat = request.form['tratamiento']
         desc = int(request.form['descanso'])
-        cur.execute("UPDATE diagnosticos SET diagnostico=?, tratamiento=?, descanso_medico_dias=? WHERE id_cita=?", (diag, trat, desc, id_cita))
+        ejecutar_consulta(cur, "UPDATE diagnosticos SET diagnostico=?, tratamiento=?, descanso_medico_dias=? WHERE id_cita=?", (diag, trat, desc, id_cita))
         conn.commit()
         conn.close()
         generar_y_guardar_informe_pdf(id_cita)
         flash("Informe actualizado.", 'success')
         return redirect(url_for('atencion_medica'))
-    cur.execute("SELECT diagnostico, tratamiento, descanso_medico_dias FROM diagnosticos WHERE id_cita=?", (id_cita,))
+    ejecutar_consulta(cur, "SELECT diagnostico, tratamiento, descanso_medico_dias FROM diagnosticos WHERE id_cita=?", (id_cita,))
     data = cur.fetchone()
     conn.close()
     if not data: return "Informe no encontrado", 404
@@ -1728,7 +1741,7 @@ def ver_informe(id_cita):
         return redirect(url_for('dashboard'))
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT informe_pdf_path FROM diagnosticos WHERE id_cita=?", (id_cita,))
+    ejecutar_consulta(cur, "SELECT informe_pdf_path FROM diagnosticos WHERE id_cita=?", (id_cita,))
     res = cur.fetchone()
     conn.close()
     if res and res[0]:
@@ -1741,7 +1754,7 @@ def exportar_informe(id_cita):
         return redirect(url_for('dashboard'))
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT informe_pdf_path FROM diagnosticos WHERE id_cita=?", (id_cita,))
+    ejecutar_consulta(cur, "SELECT informe_pdf_path FROM diagnosticos WHERE id_cita=?", (id_cita,))
     res = cur.fetchone()
     conn.close()
     if res and res[0]:
@@ -1763,7 +1776,7 @@ def recetas():
         sql += " AND (p.nombre LIKE ? OR p.apellido LIKE ? OR r.numero_cuenta LIKE ?)"
         params = [f'%{q}%', f'%{q}%', f'%{q}%']
     sql += " ORDER BY r.fecha_emision DESC"
-    cur.execute(sql, params)
+    ejecutar_consulta(cur, sql, params)
     recetas = cur.fetchall()
     conn.close()
     contenido = """
@@ -1782,22 +1795,22 @@ def nueva_receta(id_cita):
         return redirect(url_for('dashboard'))
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("""SELECT c.id_paciente, p.nombre, p.apellido, p.nro_afiliacion, s.nombre, m.nombre||' '||m.apellido, c.fecha_cita
+    ejecutar_consulta(cur, """SELECT c.id_paciente, p.nombre, p.apellido, p.nro_afiliacion, s.nombre, m.nombre||' '||m.apellido, c.fecha_cita
                    FROM citas c JOIN pacientes p ON c.id_paciente=p.id JOIN servicios s ON c.id_servicio=s.id JOIN medicos m ON c.id_medico=m.id WHERE c.id=?""", (id_cita,))
     cita = cur.fetchone()
     if not cita:
         conn.close()
         flash('Cita no encontrada', 'danger')
         return redirect(url_for('atencion_medica'))
-    cur.execute("SELECT id, codigo, nombre, precio FROM procedimientos WHERE activo=1 ORDER BY nombre")
+    ejecutar_consulta(cur, "SELECT id, codigo, nombre, precio FROM procedimientos WHERE activo=1 ORDER BY nombre")
     procedimientos = cur.fetchall()
     if request.method == 'POST':
         num_cuenta = request.form['numero_cuenta']
         diag = request.form['diagnostico']
         ind = request.form['indicaciones']
-        cur.execute("SELECT id_medico FROM citas WHERE id=?", (id_cita,))
+        ejecutar_consulta(cur, "SELECT id_medico FROM citas WHERE id=?", (id_cita,))
         id_med = cur.fetchone()[0]
-        cur.execute("INSERT INTO recetas (id_cita, id_paciente, id_medico, numero_cuenta, diagnostico, indicaciones) VALUES (?,?,?,?,?,?)",
+        ejecutar_consulta(cur, "INSERT INTO recetas (id_cita, id_paciente, id_medico, numero_cuenta, diagnostico, indicaciones) VALUES (?,?,?,?,?,?)",
                     (id_cita, cita[0], id_med, num_cuenta, diag, ind))
         id_rec = cur.lastrowid
         ids_proc = request.form.getlist('procedimiento_id[]')
@@ -1805,10 +1818,10 @@ def nueva_receta(id_cita):
         obs = request.form.getlist('observacion[]')
         for i, id_proc in enumerate(ids_proc):
             if id_proc and int(id_proc)>0:
-                cur.execute("SELECT precio FROM procedimientos WHERE id=?", (id_proc,))
+                ejecutar_consulta(cur, "SELECT precio FROM procedimientos WHERE id=?", (id_proc,))
                 prec = cur.fetchone()
                 pu = float(prec[0]) if prec else 0
-                cur.execute("INSERT INTO receta_detalle (id_receta, id_procedimiento, cantidad, precio_unitario, observaciones) VALUES (?,?,?,?,?)",
+                ejecutar_consulta(cur, "INSERT INTO receta_detalle (id_receta, id_procedimiento, cantidad, precio_unitario, observaciones) VALUES (?,?,?,?,?)",
                             (id_rec, id_proc, int(cant[i]), pu, obs[i]))
         conn.commit()
         conn.close()
@@ -1874,7 +1887,7 @@ def api_procedimientos():
     q = request.args.get('q', '')
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, codigo, nombre, precio FROM procedimientos WHERE activo=1 AND (codigo LIKE ? OR nombre LIKE ?)", (f'%{q}%', f'%{q}%'))
+    ejecutar_consulta(cur, "SELECT id, codigo, nombre, precio FROM procedimientos WHERE activo=1 AND (codigo LIKE ? OR nombre LIKE ?)", (f'%{q}%', f'%{q}%'))
     res = cur.fetchall()
     conn.close()
     return jsonify([{'id':r[0], 'codigo':r[1], 'nombre':r[2], 'precio':r[3]} for r in res])
@@ -1885,11 +1898,11 @@ def ver_receta(id_receta):
         return redirect(url_for('dashboard'))
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("""SELECT r.numero_cuenta, r.fecha_emision, r.diagnostico, r.indicaciones, p.nombre, p.apellido, p.nro_afiliacion, m.nombre||' '||m.apellido
+    ejecutar_consulta(cur, """SELECT r.numero_cuenta, r.fecha_emision, r.diagnostico, r.indicaciones, p.nombre, p.apellido, p.nro_afiliacion, m.nombre||' '||m.apellido
                    FROM recetas r JOIN pacientes p ON r.id_paciente=p.id JOIN medicos m ON r.id_medico=m.id WHERE r.id=?""", (id_receta,))
     rec = cur.fetchone()
     if not rec: return "Receta no encontrada", 404
-    cur.execute("""SELECT pr.codigo, pr.nombre, rd.cantidad, rd.precio_unitario, rd.observaciones
+    ejecutar_consulta(cur, """SELECT pr.codigo, pr.nombre, rd.cantidad, rd.precio_unitario, rd.observaciones
                    FROM receta_detalle rd JOIN procedimientos pr ON rd.id_procedimiento=pr.id WHERE rd.id_receta=?""", (id_receta,))
     detalles = cur.fetchall()
     conn.close()
@@ -1912,11 +1925,11 @@ def imprimir_receta_pdf(id_receta):
         return redirect(url_for('dashboard'))
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("""SELECT r.numero_cuenta, r.fecha_emision, r.diagnostico, r.indicaciones, p.nombre, p.apellido, p.nro_afiliacion, m.nombre||' '||m.apellido
+    ejecutar_consulta(cur, """SELECT r.numero_cuenta, r.fecha_emision, r.diagnostico, r.indicaciones, p.nombre, p.apellido, p.nro_afiliacion, m.nombre||' '||m.apellido
                    FROM recetas r JOIN pacientes p ON r.id_paciente=p.id JOIN medicos m ON r.id_medico=m.id WHERE r.id=?""", (id_receta,))
     rec = cur.fetchone()
     if not rec: return "Receta no encontrada", 404
-    cur.execute("""SELECT pr.codigo, pr.nombre, rd.cantidad, rd.precio_unitario, rd.observaciones
+    ejecutar_consulta(cur, """SELECT pr.codigo, pr.nombre, rd.cantidad, rd.precio_unitario, rd.observaciones
                    FROM receta_detalle rd JOIN procedimientos pr ON rd.id_procedimiento=pr.id WHERE rd.id_receta=?""", (id_receta,))
     detalles = cur.fetchall()
     conn.close()
@@ -1974,7 +1987,7 @@ def configuracion_sistema():
             ticket = request.form.get('ticket_size', 'TICKET_80MM')
             report = request.form.get('report_size', 'A4')
             result = request.form.get('result_size', 'A4')
-            cur.execute("""UPDATE configuracion_sistema SET nombre_sistema=?, tamano_hoja=?, encabezado_texto=?, pie_pagina_texto=?, report_header=?, report_footer=?, ticket_size=?, report_size=?, result_size=? WHERE id=1""",
+            ejecutar_consulta(cur, """UPDATE configuracion_sistema SET nombre_sistema=?, tamano_hoja=?, encabezado_texto=?, pie_pagina_texto=?, report_header=?, report_footer=?, ticket_size=?, report_size=?, result_size=? WHERE id=1""",
                         (nombre, tamano, encabezado, pie, header, footer, ticket, report, result))
             conn.commit()
             flash('Configuración actualizada.', 'success')
@@ -2020,11 +2033,11 @@ def configuracion_sistema():
                 if key.startswith('mod_'):
                     id_mod = int(key.split('_')[1])
                     activo = 1 if val == 'on' else 0
-                    cur.execute("UPDATE config_modulos SET activo=? WHERE id=?", (activo, id_mod))
+                    ejecutar_consulta(cur, "UPDATE config_modulos SET activo=? WHERE id=?", (activo, id_mod))
             conn.commit()
             flash('Módulos actualizados.', 'success')
             return redirect(url_for('configuracion_sistema', tab='modulos'))
-        cur.execute("SELECT id, nombre, activo, descripcion FROM config_modulos ORDER BY id")
+        ejecutar_consulta(cur, "SELECT id, nombre, activo, descripcion FROM config_modulos ORDER BY id")
         modulos = cur.fetchall()
         conn.close()
         contenido = """
@@ -2042,17 +2055,17 @@ def configuracion_sistema():
             modulo = request.form.get('modulo')
             if rol and modulo:
                 if IS_POSTGRES:
-                    cur.execute("INSERT INTO permisos_roles (rol, modulo) VALUES (%s,%s) ON CONFLICT (rol, modulo) DO NOTHING", (rol, modulo))
+                    ejecutar_consulta(cur, "INSERT INTO permisos_roles (rol, modulo) VALUES (%s,%s) ON CONFLICT (rol, modulo) DO NOTHING", (rol, modulo))
                 else:
-                    cur.execute("INSERT OR IGNORE INTO permisos_roles (rol, modulo) VALUES (?,?)", (rol, modulo))
+                    ejecutar_consulta(cur, "INSERT OR IGNORE INTO permisos_roles (rol, modulo) VALUES (?,?)", (rol, modulo))
                 conn.commit()
                 flash('Permiso agregado.', 'success')
             return redirect(url_for('configuracion_sistema', tab='roles'))
-        cur.execute("SELECT DISTINCT rol FROM permisos_roles ORDER BY rol")
+        ejecutar_consulta(cur, "SELECT DISTINCT rol FROM permisos_roles ORDER BY rol")
         roles = [r[0] for r in cur.fetchall()]
-        cur.execute("SELECT nombre FROM config_modulos WHERE activo=1")
+        ejecutar_consulta(cur, "SELECT nombre FROM config_modulos WHERE activo=1")
         modulos = [m[0] for m in cur.fetchall()]
-        cur.execute("SELECT rol, modulo FROM permisos_roles ORDER BY rol, modulo")
+        ejecutar_consulta(cur, "SELECT rol, modulo FROM permisos_roles ORDER BY rol, modulo")
         permisos = cur.fetchall()
         conn.close()
         contenido = """
@@ -2074,15 +2087,15 @@ def configuracion_sistema():
                 hashed = generate_password_hash(password)
                 try:
                     if IS_POSTGRES:
-                        cur.execute("INSERT INTO usuarios (usuario, password_hash, rol) VALUES (%s,%s,%s) ON CONFLICT (usuario) DO NOTHING", (usuario, hashed, rol))
+                        ejecutar_consulta(cur, "INSERT INTO usuarios (usuario, password_hash, rol) VALUES (%s,%s,%s) ON CONFLICT (usuario) DO NOTHING", (usuario, hashed, rol))
                     else:
-                        cur.execute("INSERT OR IGNORE INTO usuarios (usuario, password_hash, rol) VALUES (?,?,?)", (usuario, hashed, rol))
+                        ejecutar_consulta(cur, "INSERT OR IGNORE INTO usuarios (usuario, password_hash, rol) VALUES (?,?,?)", (usuario, hashed, rol))
                     conn.commit()
                     flash('Usuario creado.', 'success')
                 except Exception as e:
                     flash(f'Error: {str(e)}', 'danger')
             return redirect(url_for('configuracion_sistema', tab='personal'))
-        cur.execute("SELECT id, usuario, rol FROM usuarios ORDER BY id")
+        ejecutar_consulta(cur, "SELECT id, usuario, rol FROM usuarios ORDER BY id")
         usuarios = cur.fetchall()
         conn.close()
         contenido = """
@@ -2107,7 +2120,7 @@ def configuracion_sistema():
                 email = request.form.get('email', '')
                 licencia = request.form.get('numero_licencia', '')
                 try:
-                    cur.execute("""INSERT INTO medicos (nombre, apellido, especialidad, horario, telefono, email, numero_licencia, activo)
+                    ejecutar_consulta(cur, """INSERT INTO medicos (nombre, apellido, especialidad, horario, telefono, email, numero_licencia, activo)
                                    VALUES (?,?,?,?,?,?,?,1)""", (nombre, apellido, especialidad, horario, telefono, email, licencia))
                     conn.commit()
                     flash('Médico agregado.', 'success')
@@ -2124,7 +2137,7 @@ def configuracion_sistema():
                 licencia = request.form.get('numero_licencia', '')
                 activo = 1 if request.form.get('activo') == 'on' else 0
                 try:
-                    cur.execute("""UPDATE medicos SET nombre=?, apellido=?, especialidad=?, horario=?, telefono=?, email=?, numero_licencia=?, activo=? WHERE id=?""",
+                    ejecutar_consulta(cur, """UPDATE medicos SET nombre=?, apellido=?, especialidad=?, horario=?, telefono=?, email=?, numero_licencia=?, activo=? WHERE id=?""",
                                 (nombre, apellido, especialidad, horario, telefono, email, licencia, activo, id_med))
                     conn.commit()
                     flash('Médico actualizado.', 'success')
@@ -2133,13 +2146,13 @@ def configuracion_sistema():
             elif accion == 'eliminar':
                 id_med = request.form['id_medico']
                 try:
-                    cur.execute("DELETE FROM medicos WHERE id=?", (id_med,))
+                    ejecutar_consulta(cur, "DELETE FROM medicos WHERE id=?", (id_med,))
                     conn.commit()
                     flash('Médico eliminado.', 'success')
                 except Exception as e:
                     flash(f'Error: {str(e)}', 'danger')
             return redirect(url_for('configuracion_sistema', tab='medicos'))
-        cur.execute("SELECT id, nombre, apellido, especialidad, horario, telefono, email, numero_licencia, activo FROM medicos ORDER BY nombre")
+        ejecutar_consulta(cur, "SELECT id, nombre, apellido, especialidad, horario, telefono, email, numero_licencia, activo FROM medicos ORDER BY nombre")
         medicos = cur.fetchall()
         conn.close()
         contenido = """
@@ -2187,9 +2200,9 @@ def configuracion_sistema():
                 fv = request.form.get('fecha_vencimiento', '')
                 try:
                     if IS_POSTGRES:
-                        cur.execute("INSERT INTO medicamentos (codigo, nombre, descripcion, precio, stock, unidad_medida, laboratorio, fecha_vencimiento, activo) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,1)", (codigo, nombre, desc, precio, stock, unidad, lab, fv if fv else None))
+                        ejecutar_consulta(cur, "INSERT INTO medicamentos (codigo, nombre, descripcion, precio, stock, unidad_medida, laboratorio, fecha_vencimiento, activo) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,1)", (codigo, nombre, desc, precio, stock, unidad, lab, fv if fv else None))
                     else:
-                        cur.execute("INSERT OR IGNORE INTO medicamentos (codigo, nombre, descripcion, precio, stock, unidad_medida, laboratorio, fecha_vencimiento, activo) VALUES (?,?,?,?,?,?,?,?,1)", (codigo, nombre, desc, precio, stock, unidad, lab, fv if fv else None))
+                        ejecutar_consulta(cur, "INSERT OR IGNORE INTO medicamentos (codigo, nombre, descripcion, precio, stock, unidad_medida, laboratorio, fecha_vencimiento, activo) VALUES (?,?,?,?,?,?,?,?,1)", (codigo, nombre, desc, precio, stock, unidad, lab, fv if fv else None))
                     conn.commit()
                     flash('Medicamento agregado.', 'success')
                 except Exception as e:
@@ -2206,7 +2219,7 @@ def configuracion_sistema():
                 fv = request.form.get('fecha_vencimiento', '')
                 activo = 1 if request.form.get('activo') == 'on' else 0
                 try:
-                    cur.execute("""UPDATE medicamentos SET codigo=?, nombre=?, descripcion=?, precio=?, stock=?, unidad_medida=?, laboratorio=?, fecha_vencimiento=?, activo=? WHERE id=?""",
+                    ejecutar_consulta(cur, """UPDATE medicamentos SET codigo=?, nombre=?, descripcion=?, precio=?, stock=?, unidad_medida=?, laboratorio=?, fecha_vencimiento=?, activo=? WHERE id=?""",
                                 (codigo, nombre, desc, precio, stock, unidad, lab, fv if fv else None, activo, id_med))
                     conn.commit()
                     flash('Medicamento actualizado.', 'success')
@@ -2215,13 +2228,13 @@ def configuracion_sistema():
             elif accion == 'eliminar':
                 id_med = request.form['id_medicamento']
                 try:
-                    cur.execute("DELETE FROM medicamentos WHERE id=?", (id_med,))
+                    ejecutar_consulta(cur, "DELETE FROM medicamentos WHERE id=?", (id_med,))
                     conn.commit()
                     flash('Medicamento eliminado.', 'success')
                 except Exception as e:
                     flash(f'Error: {str(e)}', 'danger')
             return redirect(url_for('configuracion_sistema', tab='medicamentos'))
-        cur.execute("SELECT id, codigo, nombre, descripcion, precio, stock, unidad_medida, laboratorio, fecha_vencimiento, activo FROM medicamentos ORDER BY nombre")
+        ejecutar_consulta(cur, "SELECT id, codigo, nombre, descripcion, precio, stock, unidad_medida, laboratorio, fecha_vencimiento, activo FROM medicamentos ORDER BY nombre")
         medicamentos = cur.fetchall()
         conn.close()
         contenido = """
@@ -2264,18 +2277,18 @@ def configuracion_sistema():
                 desc = request.form['descripcion']
                 prec = request.form['precio']
                 if IS_POSTGRES:
-                    cur.execute("INSERT INTO examenes_catalogo (codigo, descripcion, precio) VALUES (%s,%s,%s)", (cod, desc, prec))
+                    ejecutar_consulta(cur, "INSERT INTO examenes_catalogo (codigo, descripcion, precio) VALUES (%s,%s,%s)", (cod, desc, prec))
                 else:
-                    cur.execute("INSERT INTO examenes_catalogo (codigo, descripcion, precio) VALUES (?,?,?)", (cod, desc, prec))
+                    ejecutar_consulta(cur, "INSERT INTO examenes_catalogo (codigo, descripcion, precio) VALUES (?,?,?)", (cod, desc, prec))
                 conn.commit()
                 flash('Examen agregado.', 'success')
             elif request.form.get('accion') == 'eliminar':
                 id_ex = request.form['id_examen']
-                cur.execute("DELETE FROM examenes_catalogo WHERE id=?", (id_ex,))
+                ejecutar_consulta(cur, "DELETE FROM examenes_catalogo WHERE id=?", (id_ex,))
                 conn.commit()
                 flash('Examen eliminado.', 'success')
             return redirect(url_for('configuracion_sistema', tab='examenes'))
-        cur.execute("SELECT id, codigo, descripcion, precio FROM examenes_catalogo ORDER BY id")
+        ejecutar_consulta(cur, "SELECT id, codigo, descripcion, precio FROM examenes_catalogo ORDER BY id")
         examenes = cur.fetchall()
         conn.close()
         contenido = """
@@ -2296,18 +2309,18 @@ def configuracion_sistema():
                 tip = request.form['tipo']
                 prec = request.form['precio']
                 if IS_POSTGRES:
-                    cur.execute("INSERT INTO procedimientos (codigo, nombre, tipo, precio) VALUES (%s,%s,%s,%s)", (cod, nom, tip, prec))
+                    ejecutar_consulta(cur, "INSERT INTO procedimientos (codigo, nombre, tipo, precio) VALUES (%s,%s,%s,%s)", (cod, nom, tip, prec))
                 else:
-                    cur.execute("INSERT INTO procedimientos (codigo, nombre, tipo, precio) VALUES (?,?,?,?)", (cod, nom, tip, prec))
+                    ejecutar_consulta(cur, "INSERT INTO procedimientos (codigo, nombre, tipo, precio) VALUES (?,?,?,?)", (cod, nom, tip, prec))
                 conn.commit()
                 flash('Procedimiento agregado.', 'success')
             elif request.form.get('accion') == 'eliminar':
                 id_proc = request.form['id_procedimiento']
-                cur.execute("DELETE FROM procedimientos WHERE id=?", (id_proc,))
+                ejecutar_consulta(cur, "DELETE FROM procedimientos WHERE id=?", (id_proc,))
                 conn.commit()
                 flash('Procedimiento eliminado.', 'success')
             return redirect(url_for('configuracion_sistema', tab='procedimientos'))
-        cur.execute("SELECT id, codigo, nombre, tipo, precio FROM procedimientos ORDER BY id")
+        ejecutar_consulta(cur, "SELECT id, codigo, nombre, tipo, precio FROM procedimientos ORDER BY id")
         procedimientos = cur.fetchall()
         conn.close()
         contenido = """
@@ -2345,7 +2358,7 @@ def subir_logo():
                 file.save(os.path.join('static', filename))
                 conn = get_db_connection()
                 cur = conn.cursor()
-                cur.execute("UPDATE configuracion_sistema SET logo_path=? WHERE id=1", (filename,))
+                ejecutar_consulta(cur, "UPDATE configuracion_sistema SET logo_path=? WHERE id=1", (filename,))
                 conn.commit()
                 conn.close()
                 flash('Logo subido.', 'success')
@@ -2385,7 +2398,7 @@ def subir_sello():
                 file.save(os.path.join('static', filename))
                 conn = get_db_connection()
                 cur = conn.cursor()
-                cur.execute("UPDATE configuracion_sistema SET sello_path=? WHERE id=1", (filename,))
+                ejecutar_consulta(cur, "UPDATE configuracion_sistema SET sello_path=? WHERE id=1", (filename,))
                 conn.commit()
                 conn.close()
                 flash('Sello subido.', 'success')
