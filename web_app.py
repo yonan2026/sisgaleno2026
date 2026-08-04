@@ -109,7 +109,7 @@ def init_db():
         cursor.execute("ALTER TABLE pacientes ADD COLUMN IF NOT EXISTS nro_afiliacion TEXT")
         cursor.execute("ALTER TABLE pacientes ADD COLUMN IF NOT EXISTS deleted INTEGER DEFAULT 0")
 
-    # Servicios (CORREGIDO: sin ON CONFLICT)
+    # Servicios
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS servicios (
         id {auto_inc},
         nombre {text} NOT NULL,
