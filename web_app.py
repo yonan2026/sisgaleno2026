@@ -55,7 +55,7 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     if IS_POSTGRES:
-        auto_inc = "SERIAL PRIMARY KEY"  # <--- CAMBIO CLAVE AQUÍ
+        auto_inc = "SERIAL PRIMARY KEY"
         text = "TEXT"
     else:
         auto_inc = "INTEGER PRIMARY KEY AUTOINCREMENT"
@@ -115,7 +115,6 @@ def init_db():
         nombre {text} NOT NULL,
         precio_base REAL DEFAULT 0
     )''')
-    # Insertar servicios sin depender de ON CONFLICT
     servicios_data = [('MEDICINA GENERAL',50),('MEDICINA INTERNA',60),('MEDICINA FISICA',40),('PEDIATRIA',35),('GINECOLOGIA',70),('TRAUMATOLOGIA',65),('CIRUGIA',100),('OTROS',50)]
     for nombre, precio in servicios_data:
         if IS_POSTGRES:
@@ -137,7 +136,6 @@ def init_db():
         tipo_asegurado {text},
         numero_boleta {text}
     )''')
-    # Nota: en PostgreSQL podemos poner REFERENCES directo; en SQLite se crea igual.
 
     # Pagos
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS pagos (
@@ -259,7 +257,11 @@ def init_db():
     else:
         for col in ['sello_path','ticket_size','report_size','result_size']:
             cursor.execute(f"ALTER TABLE configuracion_sistema ADD COLUMN IF NOT EXISTS {col} TEXT DEFAULT ''")
-    cursor.execute("INSERT OR IGNORE INTO configuracion_sistema (id) VALUES (1)")
+    # Insertar registro inicial si no existe (CORREGIDO)
+    if IS_POSTGRES:
+        cursor.execute("INSERT INTO configuracion_sistema (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
+    else:
+        cursor.execute("INSERT OR IGNORE INTO configuracion_sistema (id) VALUES (1)")
 
     # Módulos
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS config_modulos (
