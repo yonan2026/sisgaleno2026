@@ -55,7 +55,7 @@ def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     if IS_POSTGRES:
-        auto_inc = "SERIAL"
+        auto_inc = "SERIAL PRIMARY KEY"  # <--- CAMBIO CLAVE AQUÍ
         text = "TEXT"
     else:
         auto_inc = "INTEGER PRIMARY KEY AUTOINCREMENT"
@@ -128,30 +128,27 @@ def init_db():
     # Citas
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS citas (
         id {auto_inc},
-        id_paciente INTEGER,
-        id_servicio INTEGER,
+        id_paciente INTEGER REFERENCES pacientes(id),
+        id_servicio INTEGER REFERENCES servicios(id),
         id_medico INTEGER,
         fecha_cita {text},
         estado {text},
         motivo_consulta {text},
         tipo_asegurado {text},
-        numero_boleta {text},
-        FOREIGN KEY(id_paciente) REFERENCES pacientes(id),
-        FOREIGN KEY(id_servicio) REFERENCES servicios(id)
+        numero_boleta {text}
     )''')
+    # Nota: en PostgreSQL podemos poner REFERENCES directo; en SQLite se crea igual.
 
     # Pagos
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS pagos (
         id {auto_inc},
-        id_cita INTEGER,
-        id_paciente INTEGER,
+        id_cita INTEGER REFERENCES citas(id),
+        id_paciente INTEGER REFERENCES pacientes(id),
         numero_boleta {text} UNIQUE NOT NULL,
         descripcion {text},
         monto REAL,
         fecha_pago {text},
-        estado {text},
-        FOREIGN KEY(id_cita) REFERENCES citas(id),
-        FOREIGN KEY(id_paciente) REFERENCES pacientes(id)
+        estado {text}
     )''')
 
     # Exámenes catálogo
@@ -171,37 +168,31 @@ def init_db():
     # Parámetros
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS examenes_parametros (
         id {auto_inc},
-        id_examen_catalogo INTEGER,
+        id_examen_catalogo INTEGER REFERENCES examenes_catalogo(id),
         nombre_parametro {text} NOT NULL,
         unidad {text},
         rango_referencia {text},
-        orden INTEGER DEFAULT 0,
-        FOREIGN KEY(id_examen_catalogo) REFERENCES examenes_catalogo(id)
+        orden INTEGER DEFAULT 0
     )''')
 
     # Órdenes laboratorio
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS ordenes_laboratorio (
         id {auto_inc},
-        id_paciente INTEGER,
-        id_examen INTEGER,
-        id_cita INTEGER,
+        id_paciente INTEGER REFERENCES pacientes(id),
+        id_examen INTEGER REFERENCES examenes_catalogo(id),
+        id_cita INTEGER REFERENCES citas(id),
         fecha_emision {text},
         estado {text},
         precio REAL,
-        id_pago INTEGER,
+        id_pago INTEGER REFERENCES pagos(id),
         codigo_muestra {text},
         fecha_validez DATE,
         examen_manual {text},
         servicio_manual {text},
         tipo_orden {text} DEFAULT 'examen',
-        tecnologo_id INTEGER,
+        tecnologo_id INTEGER REFERENCES usuarios(id),
         fecha_resultado {text},
-        validado INTEGER DEFAULT 0,
-        FOREIGN KEY(id_paciente) REFERENCES pacientes(id),
-        FOREIGN KEY(id_examen) REFERENCES examenes_catalogo(id),
-        FOREIGN KEY(id_cita) REFERENCES citas(id),
-        FOREIGN KEY(id_pago) REFERENCES pagos(id),
-        FOREIGN KEY(tecnologo_id) REFERENCES usuarios(id)
+        validado INTEGER DEFAULT 0
     )''')
     if not IS_POSTGRES:
         cursor.execute("PRAGMA table_info(ordenes_laboratorio)")
@@ -220,32 +211,28 @@ def init_db():
     # Resultados lab
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS resultados_lab (
         id {auto_inc},
-        id_orden INTEGER,
-        id_parametro INTEGER,
-        resultado {text},
-        FOREIGN KEY(id_orden) REFERENCES ordenes_laboratorio(id),
-        FOREIGN KEY(id_parametro) REFERENCES examenes_parametros(id)
+        id_orden INTEGER REFERENCES ordenes_laboratorio(id),
+        id_parametro INTEGER REFERENCES examenes_parametros(id),
+        resultado {text}
     )''')
 
     # Imágenes
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS imagenes_laboratorio (
         id {auto_inc},
-        id_orden INTEGER,
+        id_orden INTEGER REFERENCES ordenes_laboratorio(id),
         nombre_archivo {text},
-        ruta_archivo {text},
-        FOREIGN KEY(id_orden) REFERENCES ordenes_laboratorio(id)
+        ruta_archivo {text}
     )''')
 
     # Diagnósticos
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS diagnosticos (
         id {auto_inc},
-        id_cita INTEGER,
+        id_cita INTEGER REFERENCES citas(id),
         id_medico INTEGER,
         diagnostico {text},
         tratamiento {text},
         descanso_medico_dias INTEGER,
-        informe_pdf_path {text},
-        FOREIGN KEY(id_cita) REFERENCES citas(id)
+        informe_pdf_path {text}
     )''')
 
     # Configuración sistema
@@ -348,28 +335,23 @@ def init_db():
     # Recetas
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS recetas (
         id {auto_inc},
-        id_cita INTEGER,
-        id_paciente INTEGER,
-        id_medico INTEGER,
+        id_cita INTEGER REFERENCES citas(id),
+        id_paciente INTEGER REFERENCES pacientes(id),
+        id_medico INTEGER REFERENCES medicos(id),
         numero_cuenta {text},
         fecha_emision {text} DEFAULT CURRENT_TIMESTAMP,
         diagnostico {text},
         indicaciones {text},
-        estado {text} DEFAULT 'activa',
-        FOREIGN KEY(id_cita) REFERENCES citas(id),
-        FOREIGN KEY(id_paciente) REFERENCES pacientes(id),
-        FOREIGN KEY(id_medico) REFERENCES medicos(id)
+        estado {text} DEFAULT 'activa'
     )''')
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS receta_detalle (
         id {auto_inc},
-        id_receta INTEGER,
-        id_procedimiento INTEGER,
+        id_receta INTEGER REFERENCES recetas(id) ON DELETE CASCADE,
+        id_procedimiento INTEGER REFERENCES procedimientos(id),
         procedimiento_manual {text},
         cantidad INTEGER DEFAULT 1,
         precio_unitario REAL DEFAULT 0,
-        observaciones {text},
-        FOREIGN KEY(id_receta) REFERENCES recetas(id) ON DELETE CASCADE,
-        FOREIGN KEY(id_procedimiento) REFERENCES procedimientos(id)
+        observaciones {text}
     )''')
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS farmacias (
         id {auto_inc},
@@ -381,12 +363,11 @@ def init_db():
     # Autorizaciones eliminación
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS autorizaciones_eliminacion (
         id {auto_inc},
-        id_paciente INTEGER,
+        id_paciente INTEGER REFERENCES pacientes(id),
         usuario_autoriza {text},
         fecha_autorizacion {text} DEFAULT CURRENT_TIMESTAMP,
         archivo_pdf {text} NOT NULL,
-        motivo {text},
-        FOREIGN KEY(id_paciente) REFERENCES pacientes(id)
+        motivo {text}
     )''')
 
     # Medicamentos
