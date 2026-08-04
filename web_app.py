@@ -49,7 +49,6 @@ TICKET_80MM_LANDSCAPE = (297 * 28.35, 80 * 28.35)
 def ejecutar_consulta(cursor, query, params=None):
     """Ejecuta una consulta SQL adaptando los placeholders según el motor."""
     if IS_POSTGRES:
-        # Reemplazar ? por %s (los placeholders de psycopg2)
         query = query.replace('?', '%s')
     if params is None:
         cursor.execute(query)
@@ -174,6 +173,19 @@ def init_db():
         else:
             ejecutar_consulta(cursor, "INSERT OR IGNORE INTO examenes_catalogo (id,codigo,descripcion,precio) VALUES (?,?,?,?)", (id_ex, cod, desc, precio))
 
+    # ===== NUEVO: SECCIONES DE PARÁMETROS =====
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS secciones_parametros (
+        id {auto_inc},
+        nombre {text} UNIQUE NOT NULL,
+        orden INTEGER DEFAULT 0
+    )''')
+    secciones_defecto = ['HEMATOLOGIA', 'BIOQUIMICA', 'INMUNOLOGIA', 'UROANALISIS', 'PARASITOLOGIA', 'MICROBIOLOGIA']
+    for idx, nombre in enumerate(secciones_defecto):
+        if IS_POSTGRES:
+            cursor.execute("INSERT INTO secciones_parametros (nombre, orden) VALUES (%s,%s) ON CONFLICT (nombre) DO NOTHING", (nombre, idx))
+        else:
+            cursor.execute("INSERT OR IGNORE INTO secciones_parametros (nombre, orden) VALUES (?,?)", (nombre, idx))
+
     # Parámetros
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS examenes_parametros (
         id {auto_inc},
@@ -181,7 +193,26 @@ def init_db():
         nombre_parametro {text} NOT NULL,
         unidad {text},
         rango_referencia {text},
-        orden INTEGER DEFAULT 0
+        orden INTEGER DEFAULT 0,
+        id_seccion INTEGER REFERENCES secciones_parametros(id)
+    )''')
+    # Para compatibilidad con SQLite, agregar columna id_seccion si no existe
+    if not IS_POSTGRES:
+        cursor.execute("PRAGMA table_info(examenes_parametros)")
+        cols = [row[1] for row in cursor.fetchall()]
+        if 'id_seccion' not in cols:
+            cursor.execute("ALTER TABLE examenes_parametros ADD COLUMN id_seccion INTEGER")
+    else:
+        cursor.execute("ALTER TABLE examenes_parametros ADD COLUMN IF NOT EXISTS id_seccion INTEGER REFERENCES secciones_parametros(id)")
+
+    # ===== PARÁMETROS EXTRA POR ORDEN =====
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS parametros_extra_orden (
+        id {auto_inc},
+        id_orden INTEGER REFERENCES ordenes_laboratorio(id) ON DELETE CASCADE,
+        nombre_analisis {text} NOT NULL,
+        resultado {text},
+        rango_referencia {text},
+        id_seccion INTEGER REFERENCES secciones_parametros(id)
     )''')
 
     # Órdenes laboratorio
@@ -204,7 +235,7 @@ def init_db():
         validado INTEGER DEFAULT 0
     )''')
     if not IS_POSTGRES:
-        ejecutar_consulta(cursor, "PRAGMA table_info(ordenes_laboratorio)")
+        cursor.execute("PRAGMA table_info(ordenes_laboratorio)")
         cols = [row[1] for row in cursor.fetchall()]
         for col in ['codigo_muestra','fecha_validez','examen_manual','servicio_manual','tipo_orden','tecnologo_id','fecha_resultado','validado']:
             if col not in cols:
@@ -260,7 +291,7 @@ def init_db():
         result_size {text} DEFAULT 'A4'
     )''')
     if not IS_POSTGRES:
-        ejecutar_consulta(cursor, "PRAGMA table_info(configuracion_sistema)")
+        cursor.execute("PRAGMA table_info(configuracion_sistema)")
         cols = [row[1] for row in cursor.fetchall()]
         for col in ['sello_path','ticket_size','report_size','result_size']:
             if col not in cols:
@@ -268,7 +299,6 @@ def init_db():
     else:
         for col in ['sello_path','ticket_size','report_size','result_size']:
             cursor.execute(f"ALTER TABLE configuracion_sistema ADD COLUMN IF NOT EXISTS {col} TEXT DEFAULT ''")
-    # Insertar registro inicial si no existe
     if IS_POSTGRES:
         ejecutar_consulta(cursor, "INSERT INTO configuracion_sistema (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
     else:
@@ -301,7 +331,7 @@ def init_db():
         activo INTEGER DEFAULT 1
     )''')
     if not IS_POSTGRES:
-        ejecutar_consulta(cursor, "PRAGMA table_info(medicos)")
+        cursor.execute("PRAGMA table_info(medicos)")
         cols = [row[1] for row in cursor.fetchall()]
         for col in ['nombre','apellido','especialidad','horario','telefono','email','numero_licencia','activo']:
             if col not in cols:
@@ -676,7 +706,6 @@ def login():
         pwd = request.form['password']
         conn = get_db_connection()
         cur = conn.cursor()
-        # Usar ejecutar_consulta para adaptar placeholders
         if IS_POSTGRES:
             ejecutar_consulta(cur, "SELECT id, rol, password_hash FROM usuarios WHERE usuario=%s", (user,))
         else:
@@ -1305,48 +1334,52 @@ def laboratorio():
             if not id_paciente:
                 flash("Seleccione paciente.", 'danger')
                 return redirect(url_for('laboratorio'))
-            tipo_orden = request.form.get('tipo_orden', 'examen')
+            
+            # Recibir lista de exámenes seleccionados
+            examenes_ids = request.form.getlist('examenes_ids[]')
+            examen_manual = request.form.get('examen_manual', '').strip()
+            
+            if not examenes_ids and not examen_manual:
+                flash("Debe agregar al menos un examen.", 'danger')
+                return redirect(url_for('laboratorio'))
+            
             codigo_muestra = generar_codigo_muestra()
             fecha_validez = date.today()
-            if tipo_orden == 'examen':
-                id_examen = request.form.get('id_examen')
-                examen_manual = request.form.get('examen_manual', '').strip()
-                if id_examen:
+            fecha_emision = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            ordenes_creadas = []
+            
+            # Procesar exámenes del catálogo
+            if examenes_ids:
+                for id_examen in examenes_ids:
+                    id_examen = int(id_examen)
                     ejecutar_consulta(cur, "SELECT precio FROM examenes_catalogo WHERE id=?", (id_examen,))
                     row = cur.fetchone()
                     precio = float(row[0]) if row else 0.0
-                elif examen_manual:
-                    precio = float(request.form.get('precio_manual', 0))
-                else:
-                    flash("Seleccione examen o ingrese manual.", 'danger')
-                    return redirect(url_for('laboratorio'))
-                ejecutar_consulta(cur, """INSERT INTO ordenes_laboratorio (id_paciente, id_examen, examen_manual, fecha_emision, estado, precio, codigo_muestra, fecha_validez, tipo_orden)
-                               VALUES (?,?,?,?,?,?,?,?,?)""",
-                            (id_paciente, id_examen if id_examen else None, examen_manual,
-                             datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'Pendiente', precio,
-                             codigo_muestra, fecha_validez, 'examen'))
-                id_orden = cur.lastrowid
-                flash(f"Orden #{id_orden} creada. Código: {codigo_muestra}", 'success')
-            else:
-                servicio_manual = request.form.get('servicio_manual', '').strip()
-                if not servicio_manual:
-                    flash("Ingrese nombre del servicio.", 'danger')
-                    return redirect(url_for('laboratorio'))
-                precio = float(request.form.get('precio_servicio', 0))
-                ejecutar_consulta(cur, """INSERT INTO ordenes_laboratorio (id_paciente, servicio_manual, fecha_emision, estado, precio, codigo_muestra, fecha_validez, tipo_orden)
-                               VALUES (?,?,?,?,?,?,?,?)""",
-                            (id_paciente, servicio_manual, datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                             'Pendiente', precio, codigo_muestra, fecha_validez, 'servicio'))
-                flash(f"Servicio registrado. Código: {codigo_muestra}", 'success')
+                    ejecutar_consulta(cur, """INSERT INTO ordenes_laboratorio 
+                                   (id_paciente, id_examen, fecha_emision, estado, precio, codigo_muestra, fecha_validez, tipo_orden)
+                                   VALUES (?, ?, ?, 'Pendiente', ?, ?, ?, 'examen')""",
+                                (id_paciente, id_examen, fecha_emision, precio, codigo_muestra, fecha_validez))
+                    ordenes_creadas.append(cur.lastrowid)
+            
+            # Examen manual
+            if examen_manual:
+                precio_manual = float(request.form.get('precio_manual', 0))
+                ejecutar_consulta(cur, """INSERT INTO ordenes_laboratorio 
+                               (id_paciente, examen_manual, fecha_emision, estado, precio, codigo_muestra, fecha_validez, tipo_orden)
+                               VALUES (?, ?, ?, 'Pendiente', ?, ?, ?, 'examen')""",
+                            (id_paciente, examen_manual, fecha_emision, precio_manual, codigo_muestra, fecha_validez))
+                ordenes_creadas.append(cur.lastrowid)
+            
             conn.commit()
-            conn.close()
+            flash(f"{len(ordenes_creadas)} órdenes creadas. Código de muestra: {codigo_muestra}", 'success')
             return redirect(url_for('laboratorio'))
 
     ejecutar_consulta(cur, "SELECT id, historia_clinica, dni, nombre, apellido FROM pacientes WHERE deleted=0 ORDER BY id DESC")
     pacientes = cur.fetchall()
     ejecutar_consulta(cur, "SELECT id, descripcion, precio FROM examenes_catalogo")
     examenes = cur.fetchall()
-    # Pendientes (sin filtro de fecha)
+    
+    # Pendientes
     sql_pend = """SELECT o.id, p.nombre, p.apellido, COALESCE(e.descripcion, o.examen_manual, o.servicio_manual) AS descripcion,
                   o.estado, o.codigo_muestra, o.fecha_validez,
                   CASE WHEN EXISTS (SELECT 1 FROM pagos pg WHERE pg.id_paciente = o.id_paciente AND pg.estado='Pagado' AND (LOWER(pg.descripcion) LIKE '%' || LOWER(COALESCE(e.descripcion, o.examen_manual, o.servicio_manual)) || '%' OR LOWER(pg.descripcion) LIKE '%laboratorio%' OR LOWER(pg.descripcion) LIKE '%análisis%')) THEN 'Pagado' ELSE 'Pendiente' END AS estado_pago,
@@ -1384,31 +1417,184 @@ def laboratorio():
             <form method="POST"><input type="hidden" name="accion" value="registrar_paciente_lab"><div class="row g-2"><div class="col-md-4"><label>DNI</label><input type="text" name="dni" class="form-control" required></div><div class="col-md-4"><label>Nombre</label><input type="text" name="nombre" class="form-control" required></div><div class="col-md-4"><label>Apellido</label><input type="text" name="apellido" class="form-control" required></div></div><button class="btn btn-success mt-2">Guardar</button></form>
         </div>
         <div id="form_orden_lab" style="display:none; margin-top:15px; border-top:1px solid #ddd; padding-top:15px;">
-            <h4>Nueva Orden</h4>
-            <div class="p-3 bg-light rounded mb-3"><div class="row g-2"><div class="col-md-4"><label>DNI</label><input type="text" id="dni_auto" class="form-control" placeholder="Buscar"></div><div class="col-md-2"><button onclick="buscarPaciente()" class="btn btn-info">Buscar</button></div><div class="col-md-2"><a href="{{ url_for('admision') }}" class="btn btn-warning">Registrar</a></div></div><div id="datos_paciente" class="mt-2 text-muted">Ingrese DNI</div></div>
-            <form method="POST"><input type="hidden" name="accion" value="crear_orden"><input type="hidden" name="id_paciente" id="paciente_id">
-                <div class="row g-2"><div class="col-md-6"><label>Tipo</label><select name="tipo_orden" id="tipo_orden" class="form-control"><option value="examen">Examen</option><option value="servicio">Servicio</option></select></div><div class="col-md-6"><label>Paciente</label><input type="text" id="paciente_nombre" class="form-control" disabled></div></div>
-                <div id="bloque_examen" class="mt-2"><div class="row g-2"><div class="col-md-6"><label>Examen</label><select name="id_examen" class="form-control"><option value="">-- Manual --</option>{% for e in examenes %}<option value="{{ e[0] }}">{{ e[1] }} (S/ {{ e[2] }})</option>{% endfor %}</select></div><div class="col-md-6"><label>Manual</label><input type="text" name="examen_manual" class="form-control"></div></div><div class="mt-2"><label>Precio manual</label><input type="number" step="0.01" name="precio_manual" class="form-control"></div></div>
-                <div id="bloque_servicio" style="display:none;" class="mt-2"><div class="row g-2"><div class="col-md-6"><label>Servicio</label><input type="text" name="servicio_manual" class="form-control"></div><div class="col-md-6"><label>Precio</label><input type="number" step="0.01" name="precio_servicio" class="form-control"></div></div></div>
-                <button class="btn btn-success mt-2">Crear</button>
+            <h4>Nueva Orden de Laboratorio</h4>
+            <div class="p-3 bg-light rounded mb-3">
+                <div class="row g-2">
+                    <div class="col-md-4"><label>DNI</label><input type="text" id="dni_auto" class="form-control" placeholder="Buscar"></div>
+                    <div class="col-md-2"><button onclick="buscarPaciente()" class="btn btn-info">Buscar</button></div>
+                    <div class="col-md-2"><a href="{{ url_for('admision') }}" class="btn btn-warning">Registrar</a></div>
+                </div>
+                <div id="datos_paciente" class="mt-2 text-muted">Ingrese DNI</div>
+            </div>
+            <form method="POST" id="formOrdenLab">
+                <input type="hidden" name="accion" value="crear_orden">
+                <input type="hidden" name="id_paciente" id="paciente_id">
+                <div class="row g-2">
+                    <div class="col-md-6"><label>Paciente</label><input type="text" id="paciente_nombre" class="form-control" disabled></div>
+                    <div class="col-md-6"><label>Código de muestra</label><input type="text" id="codigo_muestra_preview" class="form-control" disabled value="(se generará al guardar)"></div>
+                </div>
+                
+                <!-- Agregar exámenes -->
+                <div class="mt-3 border p-3 rounded">
+                    <h5>Agregar exámenes</h5>
+                    <div class="row g-2">
+                        <div class="col-md-8">
+                            <select id="select_examen" class="form-control">
+                                <option value="">-- Seleccione un examen --</option>
+                                {% for e in examenes %}
+                                <option value="{{ e[0] }}" data-precio="{{ e[2] }}">{{ e[1] }} (S/ {{ e[2] }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <button type="button" class="btn btn-primary" onclick="agregarExamen()">Agregar</button>
+                        </div>
+                        <div class="col-md-2">
+                            <button type="button" class="btn btn-warning" onclick="agregarExamenManual()">Manual</button>
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <input type="text" id="examen_manual_input" class="form-control" placeholder="Nombre del examen manual" style="display:none;">
+                        <input type="number" id="precio_manual_input" class="form-control mt-1" placeholder="Precio manual" step="0.01" style="display:none;">
+                    </div>
+                </div>
+
+                <!-- Lista de exámenes agregados -->
+                <div class="mt-3">
+                    <h5>Exámenes agregados</h5>
+                    <table class="table table-sm" id="tabla_examenes_agregados">
+                        <thead>
+                            <tr><th>Examen</th><th>Precio</th><th>Acción</th></tr>
+                        </thead>
+                        <tbody id="cuerpo_examenes_agregados">
+                            <tr id="fila_vacia"><td colspan="3" class="text-muted">No hay exámenes agregados</td></tr>
+                        </tbody>
+                        <tfoot>
+                            <tr><td><strong>TOTAL</strong></td><td><strong id="total_agregados">S/ 0.00</strong></td><td></td></tr>
+                        </tfoot>
+                    </table>
+                </div>
+
+                <div id="examenes_ids_container"></div>
+
+                <button class="btn btn-success mt-2" onclick="return validarYEnviar()">Crear Orden</button>
+                <button type="button" class="btn btn-secondary mt-2" onclick="toggleForm('form_orden_lab')">Cancelar</button>
             </form>
         </div>
         <h4 class="mt-3">Pacientes</h4>
         <table class="table"><thead><tr><th>HC</th><th>DNI</th><th>Nombre</th><th>Apellido</th><th>Acciones</th></tr></thead><tbody>{% for p in pacientes %}<tr><td>{{ p[1] }}</td><td>{{ p[2] }}</td><td>{{ p[3] }}</td><td>{{ p[4] }}</td><td><button onclick="editarPacienteLab({{ p[0] }},'{{ p[3] }}','{{ p[4] }}','{{ p[2] }}')" class="btn btn-warning btn-sm">✏️</button>{% if paciente_tiene_pagos(p[0]) %}<button class="btn btn-danger btn-sm" onclick="abrirModalEliminar({{ p[0] }})">🗑️</button>{% else %}<form style="display:inline;" method="POST" onsubmit="return confirm('¿Eliminar?')"><input type="hidden" name="accion" value="eliminar_paciente_lab"><input type="hidden" name="id_paciente" value="{{ p[0] }}"><button class="btn btn-danger btn-sm">🗑️</button></form>{% endif %}</td></tr>{% else %}<tr><td colspan="5">Sin pacientes</td></tr>{% endfor %}</tbody></table>
     </div>
     <div id="form_editar_lab" style="display:none;" class="card p-3 mb-3"><h4>Editar</h4><form method="POST"><input type="hidden" name="accion" value="editar_paciente_lab"><input type="hidden" name="id_paciente" id="edit_id_paciente"><div class="row g-2"><div class="col-md-4"><label>Nombre</label><input type="text" name="nombre" id="edit_nombre" class="form-control" required></div><div class="col-md-4"><label>Apellido</label><input type="text" name="apellido" id="edit_apellido" class="form-control" required></div><div class="col-md-4"><label>DNI</label><input type="text" name="dni" id="edit_dni" class="form-control" required></div></div><button class="btn btn-warning mt-2">Guardar</button><button type="button" onclick="document.getElementById('form_editar_lab').style.display='none'" class="btn btn-secondary mt-2">Cancelar</button></form></div>
-    <!-- Modal eliminar con PDF -->
+    
     <div class="modal fade" id="modalEliminarConPDF" tabindex="-1"><div class="modal-dialog"><div class="modal-content"><form method="POST" enctype="multipart/form-data"><div class="modal-header"><h5>Eliminar con autorización</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div><div class="modal-body"><p>Paciente con pagos. Adjunte PDF de autorización.</p><input type="hidden" name="accion" value="eliminar_paciente_con_pdf"><input type="hidden" name="id_paciente" id="id_paciente_modal"><div class="mb-3"><label>PDF</label><input type="file" name="archivo_pdf" class="form-control" accept=".pdf" required></div><div class="mb-3"><label>Motivo</label><textarea name="motivo" class="form-control" rows="2"></textarea></div></div><div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button><button type="submit" class="btn btn-danger">Eliminar</button></div></form></div></div></div>
+    
     <h3>Pendientes de muestra</h3>
     <table class="table"><thead><tr><th>Código</th><th>Paciente</th><th>Descripción</th><th>Pago</th><th>Boleta</th><th>Monto</th><th>Acciones</th></tr></thead><tbody>{% for p in pendientes_muestra %}<tr><td>{{ p[5] }}</td><td>{{ p[1] }} {{ p[2] }}</td><td>{{ p[3] }}</td><td><span class="badge badge-{{ 'pagado' if p[7]=='Pagado' else 'pendiente' }}">{{ p[7] }}</span></td><td>{{ p[8] or '--' }}</td><td>S/ {{ p[9] or '0.00' }}</td><td><a href="{{ url_for('tomar_muestra', id_orden=p[0]) }}" class="btn btn-primary btn-sm">Tomar</a> <a href="{{ url_for('imprimir_etiqueta', id_orden=p[0]) }}" class="btn btn-warning btn-sm">Etiqueta</a></td></tr>{% else %}<tr><td colspan="7">Sin pendientes</td></tr>{% endfor %}</tbody></table>
+    
     <h3>Procesamiento</h3>
     <table class="table"><thead><tr><th>Código</th><th>Paciente</th><th>Descripción</th><th>Estado</th><th>Pago</th><th>Boleta</th><th>Monto</th><th>Resultado</th><th>Tecnólogo</th><th>Fecha Res.</th><th>Validado</th><th>Acciones</th></tr></thead><tbody>{% for o in ordenes_proceso %}<tr><td>{{ o[5] }}</td><td>{{ o[1] }} {{ o[2] }}</td><td>{{ o[3] }}</td><td><span class="badge badge-{{ 'muestra' if o[4]=='Muestra Tomada' else 'pagado' if o[4]=='Completado' else 'pendiente' }}">{{ o[4] }}</span></td><td><span class="badge badge-{{ 'pagado' if o[7]=='Pagado' else 'pendiente' }}">{{ o[7] }}</span></td><td>{{ o[8] or '--' }}</td><td>S/ {{ o[9] or '0.00' }}</td><td>{{ o[10] or 'Pendiente' }}</td><td>{{ o[12] or 'N/A' }}</td><td>{{ o[13] or 'N/A' }}</td><td>{% if o[14]==1 %}✅{% else %}❌{% endif %}</td><td>{% if o[4]=='Muestra Tomada' %}<a href="{{ url_for('ingresar_resultado', id_orden=o[0]) }}" class="btn btn-warning btn-sm">Procesar</a>{% elif o[4]=='Completado' %}<a href="{{ url_for('imprimir_resultado_lab', id_orden=o[0]) }}" class="btn btn-primary btn-sm">PDF</a>{% endif %} <a href="{{ url_for('imprimir_etiqueta', id_orden=o[0]) }}" class="btn btn-info btn-sm">Etiqueta</a></td></tr>{% else %}<tr><td colspan="12">Sin procesos</td></tr>{% endfor %}</tbody></table>
+    
     <script>
     function toggleForm(id){var x=document.getElementById(id);x.style.display=x.style.display==='none'?'block':'none';}
     function editarPacienteLab(id,nombre,apellido,dni){document.getElementById('edit_id_paciente').value=id;document.getElementById('edit_nombre').value=nombre;document.getElementById('edit_apellido').value=apellido;document.getElementById('edit_dni').value=dni;document.getElementById('form_editar_lab').style.display='block';}
     function buscarPaciente(){var dni=document.getElementById('dni_auto').value.trim();if(!dni){alert('Ingrese DNI');return;}fetch('/api/paciente_por_dni?dni='+dni).then(r=>r.json()).then(data=>{if(data.error){document.getElementById('datos_paciente').innerHTML='<div class="alert alert-danger">'+data.error+'</div>';document.getElementById('paciente_id').value='';document.getElementById('paciente_nombre').value='';return;}document.getElementById('paciente_id').value=data.id;document.getElementById('paciente_nombre').value=data.nombre+' '+data.apellido+' (HC: '+data.historia_clinica+')';document.getElementById('datos_paciente').innerHTML='<div class="alert alert-success">Paciente encontrado</div>';});}
-    var tipoOrden=document.getElementById('tipo_orden');var bloqueExamen=document.getElementById('bloque_examen');var bloqueServicio=document.getElementById('bloque_servicio');tipoOrden.addEventListener('change',function(){if(this.value==='examen'){bloqueExamen.style.display='block';bloqueServicio.style.display='none';}else{bloqueExamen.style.display='none';bloqueServicio.style.display='block';}});if(tipoOrden.value==='examen'){bloqueExamen.style.display='block';bloqueServicio.style.display='none';}else{bloqueExamen.style.display='none';bloqueServicio.style.display='block';}
     function abrirModalEliminar(id){document.getElementById('id_paciente_modal').value=id;var modal=new bootstrap.Modal(document.getElementById('modalEliminarConPDF'));modal.show();}
+    
+    var examenesAgregados = [];
+    function agregarExamen() {
+        var select = document.getElementById('select_examen');
+        var option = select.options[select.selectedIndex];
+        if (!option.value) { alert('Seleccione un examen válido.'); return; }
+        var id = parseInt(option.value);
+        var nombre = option.text.split(' (S/')[0].trim();
+        var precio = parseFloat(option.getAttribute('data-precio'));
+        if (examenesAgregados.some(e => e.id === id)) {
+            alert('Este examen ya fue agregado.');
+            return;
+        }
+        examenesAgregados.push({ id: id, nombre: nombre, precio: precio });
+        actualizarTabla();
+    }
+    function agregarExamenManual() {
+        var inputNom = document.getElementById('examen_manual_input');
+        var inputPrecio = document.getElementById('precio_manual_input');
+        if (inputNom.style.display === 'none') {
+            inputNom.style.display = 'block';
+            inputPrecio.style.display = 'block';
+            return;
+        }
+        var nombre = inputNom.value.trim();
+        var precio = parseFloat(inputPrecio.value);
+        if (!nombre || isNaN(precio) || precio <= 0) {
+            alert('Ingrese un nombre válido y un precio mayor a 0.');
+            return;
+        }
+        var id = -Date.now();
+        examenesAgregados.push({ id: id, nombre: nombre, precio: precio, manual: true });
+        inputNom.value = '';
+        inputPrecio.value = '';
+        inputNom.style.display = 'none';
+        inputPrecio.style.display = 'none';
+        actualizarTabla();
+    }
+    function eliminarExamen(index) {
+        examenesAgregados.splice(index, 1);
+        actualizarTabla();
+    }
+    function actualizarTabla() {
+        var tbody = document.getElementById('cuerpo_examenes_agregados');
+        var total = 0;
+        var html = '';
+        if (examenesAgregados.length === 0) {
+            html = '<tr id="fila_vacia"><td colspan="3" class="text-muted">No hay exámenes agregados</td></tr>';
+        } else {
+            examenesAgregados.forEach((ex, idx) => {
+                total += ex.precio;
+                html += `<tr>
+                            <td>${ex.nombre} ${ex.manual ? '(Manual)' : ''}</td>
+                            <td>S/ ${ex.precio.toFixed(2)}</td>
+                            <td><button type="button" class="btn btn-danger btn-sm" onclick="eliminarExamen(${idx})">✖</button></td>
+                        </tr>`;
+            });
+        }
+        tbody.innerHTML = html;
+        document.getElementById('total_agregados').textContent = 'S/ ' + total.toFixed(2);
+    }
+    function validarYEnviar() {
+        var pacienteId = document.getElementById('paciente_id').value;
+        if (!pacienteId) {
+            alert('Primero debe buscar y seleccionar un paciente.');
+            return false;
+        }
+        if (examenesAgregados.length === 0) {
+            alert('Debe agregar al menos un examen.');
+            return false;
+        }
+        var container = document.getElementById('examenes_ids_container');
+        container.innerHTML = '';
+        examenesAgregados.forEach(function(ex) {
+            if (!ex.manual) {
+                var input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'examenes_ids[]';
+                input.value = ex.id;
+                container.appendChild(input);
+            } else {
+                // Para manual, usar campos separados
+                var inputNom = document.createElement('input');
+                inputNom.type = 'hidden';
+                inputNom.name = 'examen_manual';
+                inputNom.value = ex.nombre;
+                container.appendChild(inputNom);
+                var inputPrecio = document.createElement('input');
+                inputPrecio.type = 'hidden';
+                inputPrecio.name = 'precio_manual';
+                inputPrecio.value = ex.precio;
+                container.appendChild(inputPrecio);
+            }
+        });
+        return true;
+    }
     </script>
     """
     config = obtener_configuracion()
@@ -1433,125 +1619,406 @@ def tomar_muestra(id_orden):
 def ingresar_resultado(id_orden):
     if 'Laboratorio' not in get_user_modules(session.get('rol')):
         return redirect(url_for('dashboard'))
+    
     conn = get_db_connection()
     cur = conn.cursor()
-    ejecutar_consulta(cur, """SELECT o.id, p.nombre, p.apellido, e.descripcion, e.id as id_examen_cat, o.examen_manual, o.servicio_manual, o.tecnologo_id, o.fecha_resultado, o.validado
-                   FROM ordenes_laboratorio o JOIN pacientes p ON o.id_paciente=p.id LEFT JOIN examenes_catalogo e ON o.id_examen=e.id WHERE o.id=?""", (id_orden,))
+    
+    # Datos de la orden
+    ejecutar_consulta(cur, """SELECT o.id, p.nombre, p.apellido, p.dni, p.edad, p.sexo, 
+                                    COALESCE(e.descripcion, o.examen_manual, o.servicio_manual) AS examen,
+                                    o.id_examen, o.examen_manual, o.servicio_manual, o.estado
+                             FROM ordenes_laboratorio o 
+                             JOIN pacientes p ON o.id_paciente=p.id 
+                             LEFT JOIN examenes_catalogo e ON o.id_examen=e.id 
+                             WHERE o.id=?""", (id_orden,))
     orden = cur.fetchone()
-    if not orden: return "Orden no encontrada", 404
-    es_manual = orden[5] is not None or orden[6] is not None
+    if not orden:
+        conn.close()
+        flash('Orden no encontrada', 'danger')
+        return redirect(url_for('laboratorio'))
+    
+    # Secciones
+    ejecutar_consulta(cur, "SELECT id, nombre FROM secciones_parametros ORDER BY orden")
+    lista_secciones = cur.fetchall()
+    
+    # Parámetros del catálogo
+    parametros = []
+    resultados_existentes = {}
+    if orden[7]:
+        ejecutar_consulta(cur, """SELECT ep.id, ep.nombre_parametro, ep.unidad, ep.rango_referencia, ep.id_seccion, ep.orden
+                                  FROM examenes_parametros ep
+                                  WHERE ep.id_examen_catalogo=?
+                                  ORDER BY COALESCE(ep.id_seccion, 0), ep.orden""", (orden[7],))
+        parametros = cur.fetchall()
+        ejecutar_consulta(cur, "SELECT id_parametro, resultado FROM resultados_lab WHERE id_orden=?", (id_orden,))
+        resultados_existentes = {r[0]: r[1] for r in cur.fetchall()}
+    
+    # Parámetros extra
+    ejecutar_consulta(cur, "SELECT id, nombre_analisis, resultado, rango_referencia, id_seccion FROM parametros_extra_orden WHERE id_orden=?", (id_orden,))
+    parametros_extra = cur.fetchall()
+    conn.close()
+    
     if request.method == 'POST':
-        if es_manual:
-            res = request.form.get('resultado_general', '')
-            ejecutar_consulta(cur, "INSERT INTO resultados_lab (id_orden, id_parametro, resultado) VALUES (?,NULL,?)", (id_orden, res))
-        else:
-            ejecutar_consulta(cur, "SELECT id FROM examenes_parametros WHERE id_examen_catalogo=?", (orden[4],))
-            params = cur.fetchall()
-            for p in params:
-                val = request.form.get(f'param_{p[0]}', '')
-                ejecutar_consulta(cur, "INSERT OR REPLACE INTO resultados_lab (id_orden, id_parametro, resultado) VALUES (?,?,?)", (id_orden, p[0], val))
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Guardar parámetros de catálogo
+        for p in parametros:
+            id_param = p[0]
+            resultado = request.form.get(f'param_{id_param}', '').strip()
+            if resultado:
+                ejecutar_consulta(cur, """INSERT INTO resultados_lab (id_orden, id_parametro, resultado)
+                                          VALUES (?,?,?) ON CONFLICT (id_orden, id_parametro) 
+                                          DO UPDATE SET resultado=excluded.resultado""", 
+                                 (id_orden, id_param, resultado))
+        
+        # Guardar parámetros extra
+        analisis_list = request.form.getlist('extra_analisis[]')
+        resultado_list = request.form.getlist('extra_resultado[]')
+        rango_list = request.form.getlist('extra_rango[]')
+        seccion_list = request.form.getlist('extra_seccion[]')
+        extra_ids = request.form.getlist('extra_id[]')
+        eliminar_ids = request.form.getlist('eliminar_extra[]')
+        
+        for eid in eliminar_ids:
+            if eid:
+                ejecutar_consulta(cur, "DELETE FROM parametros_extra_orden WHERE id=? AND id_orden=?", (eid, id_orden))
+        
+        for i in range(len(analisis_list)):
+            analisis = analisis_list[i].strip()
+            if not analisis:
+                continue
+            resultado = resultado_list[i].strip() if i < len(resultado_list) else ''
+            rango = rango_list[i].strip() if i < len(rango_list) else ''
+            seccion = seccion_list[i] if i < len(seccion_list) and seccion_list[i] else None
+            extra_id = extra_ids[i] if i < len(extra_ids) else ''
+            
+            if extra_id and extra_id.isdigit():
+                ejecutar_consulta(cur, """UPDATE parametros_extra_orden 
+                                          SET nombre_analisis=?, resultado=?, rango_referencia=?, id_seccion=?
+                                          WHERE id=? AND id_orden=?""",
+                                 (analisis, resultado, rango, seccion, extra_id, id_orden))
+            else:
+                ejecutar_consulta(cur, """INSERT INTO parametros_extra_orden 
+                                          (id_orden, nombre_analisis, resultado, rango_referencia, id_seccion)
+                                          VALUES (?,?,?,?,?)""",
+                                 (id_orden, analisis, resultado, rango, seccion if seccion else None))
+        
+        # Actualizar estado
         ahora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        ejecutar_consulta(cur, "UPDATE ordenes_laboratorio SET estado='Completado', tecnologo_id=?, fecha_resultado=?, validado=? WHERE id=?", 
-                    (session.get('id_usuario'), ahora, 1 if session.get('rol')=='tecnologo' else 0, id_orden))
+        validado = 1 if session.get('rol') == 'tecnologo' else 0
+        ejecutar_consulta(cur, """UPDATE ordenes_laboratorio 
+                                  SET estado='Completado', tecnologo_id=?, fecha_resultado=?, validado=?
+                                  WHERE id=?""",
+                         (session.get('id_usuario'), ahora, validado, id_orden))
+        
         conn.commit()
         conn.close()
-        flash('Resultados guardados.', 'success')
+        flash('Resultados guardados correctamente.', 'success')
         return redirect(url_for('laboratorio'))
-    conn.close()
-    if es_manual:
-        contenido = """
-        <h2>Procesar Orden #{{ id_orden }}</h2>
-        <div class="bg-light p-3"><b>Paciente:</b> {{ orden[1] }} {{ orden[2] }}</div>
-        <form method="POST"><div class="mb-3"><label>Resultado general</label><textarea name="resultado_general" class="form-control" rows="4"></textarea></div><button class="btn btn-success">Guardar</button><a href="{{ url_for('laboratorio') }}" class="btn btn-danger">Cancelar</a></form>
-        """
-    else:
-        ejecutar_consulta(cur, "SELECT id, nombre_parametro, unidad, rango_referencia FROM examenes_parametros WHERE id_examen_catalogo=? ORDER BY orden", (orden[4],))
-        params = cur.fetchall()
-        conn.close()
-        contenido = """
-        <h2>Procesar Orden #{{ id_orden }}</h2>
-        <div class="bg-light p-3"><b>Paciente:</b> {{ orden[1] }} {{ orden[2] }}<br><b>Examen:</b> {{ orden[3] }}</div>
-        <form method="POST"><table class="table"><thead><tr><th>Parámetro</th><th>Unidad / Rango</th><th>Resultado</th></tr></thead><tbody>{% for p in params %}<tr><td>{{ p[1] }}</td><td>{{ p[2] or '' }} {{ p[3] or '' }}</td><td><input type="text" name="param_{{ p[0] }}" class="form-control"></td></tr>{% endfor %}</tbody></table><button class="btn btn-success">Guardar</button><a href="{{ url_for('laboratorio') }}" class="btn btn-danger">Cancelar</a></form>
-        """
+    
+    # ===== FORMULARIO HTML =====
+    contenido = """
+    <h2>Procesar Orden #{{ id_orden }}</h2>
+    <div class="bg-light p-3 mb-3">
+        <b>Paciente:</b> {{ orden[1] }} {{ orden[2] }}<br>
+        <b>DNI:</b> {{ orden[3] }} | <b>Edad:</b> {{ orden[4] or 'N/E' }} | <b>Sexo:</b> {{ orden[5] or 'N/E' }}<br>
+        <b>Examen:</b> {{ orden[6] }}
+    </div>
+    
+    <form method="POST" id="formResultados">
+        {% if parametros %}
+            {% set secciones_dict = {} %}
+            {% for p in parametros %}
+                {% set id_sec = p[4] %}
+                {% if id_sec not in secciones_dict %}
+                    {% set _ = secciones_dict.update({id_sec: []}) %}
+                {% endif %}
+                {% set _ = secciones_dict[id_sec].append(p) %}
+            {% endfor %}
+            
+            {% for id_sec, params in secciones_dict.items() %}
+                <div class="card mb-3">
+                    <div class="card-header bg-primary text-white">
+                        <strong>{{ lista_secciones|selectattr('0', 'equalto', id_sec)|map(attribute='1')|first or 'Sin sección' }}</strong>
+                    </div>
+                    <div class="card-body">
+                        <table class="table table-bordered">
+                            <thead>
+                                <tr><th>ANÁLISIS</th><th>RESULTADO</th><th>RANGO DE REFERENCIA</th></tr>
+                            </thead>
+                            <tbody>
+                                {% for p in params %}
+                                    <tr>
+                                        <td>{{ p[1] }} {{ p[2] or '' }}</td>
+                                        <td><input type="text" name="param_{{ p[0] }}" class="form-control" value="{{ resultados_existentes.get(p[0], '') }}"></td>
+                                        <td>{{ p[3] or '' }}</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <div class="alert alert-info">Este examen no tiene parámetros predefinidos. Use la sección "Parámetros adicionales" para agregar filas manualmente.</div>
+        {% endif %}
+        
+        <div class="card mt-3">
+            <div class="card-header bg-success text-white d-flex justify-content-between">
+                <strong>Parámetros adicionales</strong>
+                <button type="button" class="btn btn-light btn-sm" onclick="agregarFilaExtra()">+ Agregar fila</button>
+            </div>
+            <div class="card-body">
+                <table class="table table-bordered" id="tabla_extra">
+                    <thead>
+                        <tr><th>ANÁLISIS</th><th>RESULTADO</th><th>RANGO DE REFERENCIA</th><th>SECCIÓN</th><th></th></tr>
+                    </thead>
+                    <tbody id="cuerpo_extra">
+                        {% for ex in parametros_extra %}
+                            <tr id="extra_{{ ex[0] }}">
+                                <td><input type="text" name="extra_analisis[]" class="form-control" value="{{ ex[1] }}"></td>
+                                <td><input type="text" name="extra_resultado[]" class="form-control" value="{{ ex[2] or '' }}"></td>
+                                <td><input type="text" name="extra_rango[]" class="form-control" value="{{ ex[3] or '' }}"></td>
+                                <td>
+                                    <select name="extra_seccion[]" class="form-control">
+                                        <option value="">Sin sección</option>
+                                        {% for s in lista_secciones %}
+                                            <option value="{{ s[0] }}" {% if s[0] == ex[4] %}selected{% endif %}>{{ s[1] }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </td>
+                                <td>
+                                    <input type="hidden" name="extra_id[]" value="{{ ex[0] }}">
+                                    <button type="button" class="btn btn-danger btn-sm" onclick="eliminarFilaExtra(this)">✖</button>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="mt-3">
+            <button class="btn btn-success" onclick="return validarFormulario()">Guardar Resultados</button>
+            <a href="{{ url_for('laboratorio') }}" class="btn btn-danger">Cancelar</a>
+        </div>
+    </form>
+    
+    <script>
+        function agregarFilaExtra() {
+            var tbody = document.getElementById('cuerpo_extra');
+            var fila = document.createElement('tr');
+            fila.innerHTML = `
+                <td><input type="text" name="extra_analisis[]" class="form-control" required></td>
+                <td><input type="text" name="extra_resultado[]" class="form-control"></td>
+                <td><input type="text" name="extra_rango[]" class="form-control"></td>
+                <td>
+                    <select name="extra_seccion[]" class="form-control">
+                        <option value="">Sin sección</option>
+                        {% for s in lista_secciones %}
+                            <option value="{{ s[0] }}">{{ s[1] }}</option>
+                        {% endfor %}
+                    </select>
+                </td>
+                <td>
+                    <input type="hidden" name="extra_id[]" value="">
+                    <button type="button" class="btn btn-danger btn-sm" onclick="eliminarFilaExtra(this)">✖</button>
+                </td>
+            `;
+            tbody.appendChild(fila);
+        }
+        
+        function eliminarFilaExtra(btn) {
+            var tr = btn.closest('tr');
+            var hiddenId = tr.querySelector('input[name="extra_id[]"]');
+            if (hiddenId && hiddenId.value) {
+                var inputEliminar = document.createElement('input');
+                inputEliminar.type = 'hidden';
+                inputEliminar.name = 'eliminar_extra[]';
+                inputEliminar.value = hiddenId.value;
+                document.getElementById('formResultados').appendChild(inputEliminar);
+            }
+            tr.remove();
+        }
+        
+        function validarFormulario() {
+            return true;
+        }
+    </script>
+    """
+    
     config = obtener_configuracion()
     nombre_sistema = config[0] if config else 'SISGALENO2026'
     base = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido)
     return render_template_string(base, nombre_sistema=nombre_sistema, user_modules=get_user_modules(session.get('rol')),
-                                  id_orden=id_orden, orden=orden, params=params)
+                                  id_orden=id_orden, orden=orden, parametros=parametros, 
+                                  resultados_existentes=resultados_existentes,
+                                  parametros_extra=parametros_extra, lista_secciones=lista_secciones)
 
 @app.route('/laboratorio/imprimir/<int:id_orden>')
 def imprimir_resultado_lab(id_orden):
     if 'Laboratorio' not in get_user_modules(session.get('rol')):
         return redirect(url_for('dashboard'))
+    
     conn = get_db_connection()
     cur = conn.cursor()
-    ejecutar_consulta(cur, """SELECT p.nombre, p.apellido, p.dni, COALESCE(e.descripcion, o.examen_manual, o.servicio_manual) AS descripcion,
-                   o.fecha_emision, p.edad, p.sexo, o.fecha_resultado, o.validado, o.tecnologo_id, u.usuario AS tecnologo_nombre
-                   FROM ordenes_laboratorio o JOIN pacientes p ON o.id_paciente=p.id LEFT JOIN examenes_catalogo e ON o.id_examen=e.id LEFT JOIN usuarios u ON o.tecnologo_id=u.id WHERE o.id=?""", (id_orden,))
+    
+    ejecutar_consulta(cur, """SELECT p.nombre, p.apellido, p.dni, p.edad, p.sexo, p.historia_clinica,
+                                    COALESCE(e.descripcion, o.examen_manual, o.servicio_manual) AS examen,
+                                    o.fecha_emision, o.fecha_resultado, o.validado, 
+                                    u.usuario AS tecnologo_nombre
+                             FROM ordenes_laboratorio o 
+                             JOIN pacientes p ON o.id_paciente=p.id 
+                             LEFT JOIN examenes_catalogo e ON o.id_examen=e.id 
+                             LEFT JOIN usuarios u ON o.tecnologo_id=u.id
+                             WHERE o.id=?""", (id_orden,))
     orden_data = cur.fetchone()
-    if not orden_data: return "Orden no encontrada", 404
-    ejecutar_consulta(cur, """SELECT ep.nombre_parametro, ep.unidad, ep.rango_referencia, rl.resultado
-                   FROM resultados_lab rl LEFT JOIN examenes_parametros ep ON rl.id_parametro=ep.id
-                   WHERE rl.id_orden=? ORDER BY ep.orden ASC""", (id_orden,))
-    resultados = cur.fetchall()
-    conn.close()
-    if not resultados:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        ejecutar_consulta(cur, "SELECT resultado FROM resultados_lab WHERE id_orden=? AND id_parametro IS NULL", (id_orden,))
-        row = cur.fetchone()
+    if not orden_data:
         conn.close()
-        if row:
-            resultados = [('Resultado General', '', '', row[0])]
+        return "Orden no encontrada", 404
+    
+    ejecutar_consulta(cur, """SELECT ep.nombre_parametro, ep.unidad, ep.rango_referencia, rl.resultado, s.nombre AS seccion
+                              FROM resultados_lab rl
+                              LEFT JOIN examenes_parametros ep ON rl.id_parametro=ep.id
+                              LEFT JOIN secciones_parametros s ON ep.id_seccion = s.id
+                              WHERE rl.id_orden=?
+                              ORDER BY COALESCE(s.orden, 999), ep.orden""", (id_orden,))
+    resultados = cur.fetchall()
+    
+    ejecutar_consulta(cur, """SELECT nombre_analisis, resultado, rango_referencia, s.nombre AS seccion
+                              FROM parametros_extra_orden pe
+                              LEFT JOIN secciones_parametros s ON pe.id_seccion = s.id
+                              WHERE pe.id_orden=?
+                              ORDER BY COALESCE(s.orden, 999), pe.id""", (id_orden,))
+    extra = cur.fetchall()
+    conn.close()
+    
+    items = []
+    for r in resultados:
+        items.append({
+            'analisis': r[0] + (f" ({r[1]})" if r[1] else ''),
+            'resultado': r[3] or '',
+            'rango': r[2] or '',
+            'seccion': r[4] or 'Sin sección'
+        })
+    for e in extra:
+        items.append({
+            'analisis': e[0],
+            'resultado': e[1] or '',
+            'rango': e[2] or '',
+            'seccion': e[3] or 'Sin sección'
+        })
+    
+    secciones = {}
+    for item in items:
+        sec = item['seccion']
+        if sec not in secciones:
+            secciones[sec] = []
+        secciones[sec].append(item)
+    
     config = obtener_configuracion()
     nombre_sistema = config[0] if config else 'SISGALENO2026'
     logo_path = config[2] if config else ''
-    sello_path = config[7] if len(config)>7 and config[7] else ''
+    sello_path = config[7] if len(config) > 7 and config[7] else ''
     pie = config[4] if config else ''
     size = obtener_tamano_pagina('result')
+    
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=size)
-    w,h = size
-    c.setFillColor(colors.HexColor("#1C9CD4"))
-    c.rect(0, h-80, w, 80, fill=1, stroke=0)
+    w, h = size
+    y = h - 50
+    
     if logo_path and os.path.exists(os.path.join('static', logo_path)):
-        try: c.drawImage(os.path.join('static', logo_path), 30, h-70, width=60, height=50, preserveAspectRatio=True)
-        except: pass
-    c.setFillColor(colors.white)
-    c.setFont("Helvetica-Bold", 18); c.drawString(100, h-45, nombre_sistema)
-    c.setFont("Helvetica", 10); c.drawString(100, h-65, "INFORME DE RESULTADOS")
-    c.setFillColor(colors.black)
+        try:
+            c.drawImage(os.path.join('static', logo_path), 50, y-40, width=80, height=50, preserveAspectRatio=True)
+        except:
+            pass
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(150, y, nombre_sistema)
+    c.setFont("Helvetica", 10)
+    c.drawString(150, y-18, "INFORME DE RESULTADOS DE LABORATORIO")
+    y -= 50
+    
     c.setFont("Helvetica-Bold", 10)
-    y = h-120
-    for label, val in [("Paciente:", f"{orden_data[0]} {orden_data[1]}"), ("Edad:", f"{orden_data[5] or 'N/E'} años"), ("Sexo:", orden_data[6] or 'N/E'), ("DNI:", orden_data[2]), ("Examen:", orden_data[3]), ("F. Emisión:", orden_data[4]), ("F. Resultado:", orden_data[7] or 'No registrada'), ("Tecnólogo:", orden_data[10] or 'No asignado')]:
-        c.setFont("Helvetica-Bold", 10); c.drawString(50, y, label)
-        c.setFont("Helvetica", 10); c.drawString(150, y, val); y -= 20
-    c.setFont("Helvetica-Bold", 14); c.setFillColor(colors.HexColor("#1C9CD4")); c.drawString(w/2-80, y-10, "RESULTADOS")
+    c.drawString(50, y, "Paciente:")
+    c.setFont("Helvetica", 10)
+    c.drawString(120, y, f"{orden_data[0]} {orden_data[1]}")
+    y -= 18
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(50, y, "DNI:")
+    c.drawString(120, y, orden_data[2])
+    c.drawString(250, y, "HC:")
+    c.drawString(280, y, orden_data[5] or 'N/E')
+    y -= 18
+    c.drawString(50, y, "Edad:")
+    c.drawString(120, y, f"{orden_data[3] or 'N/E'} años")
+    c.drawString(250, y, "Sexo:")
+    c.drawString(280, y, orden_data[4] or 'N/E')
+    y -= 18
+    c.drawString(50, y, "Examen:")
+    c.drawString(120, y, orden_data[6])
+    y -= 18
+    c.drawString(50, y, "F. Emisión:")
+    c.drawString(120, y, orden_data[7] or '')
+    c.drawString(250, y, "F. Resultado:")
+    c.drawString(320, y, orden_data[8] or '')
     y -= 30
-    if resultados:
-        table_data = [["PARÁMETRO", "UNIDAD / RANGO", "RESULTADO"]]
-        for r in resultados:
-            table_data.append([r[0] or 'General', f"{r[1] or ''} {r[2] or ''}", r[3] or ''])
-    else:
-        table_data = [["No hay resultados"]]
-    t = Table(table_data, colWidths=[200,150,200])
-    t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor("#1C9CD4")),('TEXTCOLOR',(0,0),(-1,0),colors.whitesmoke),('ALIGN',(0,0),(-1,-1),'CENTER'),('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),('FONTSIZE',(0,0),(-1,0),12),('BOTTOMPADDING',(0,0),(-1,0),12),('GRID',(0,0),(-1,-1),1,colors.black),('FONTNAME',(0,1),(-1,-1),'Helvetica'),('FONTSIZE',(0,1),(-1,-1),10),('VALIGN',(0,0),(-1,-1),'MIDDLE')]))
-    t.wrapOn(c,w,h)
-    t.drawOn(c,30,y - 20 - len(table_data)*20)
-    y_sello = 70
+    
+    for sec, items in secciones.items():
+        c.setFont("Helvetica-Bold", 11)
+        c.setFillColor(colors.HexColor("#1C9CD4"))
+        c.drawString(50, y, sec)
+        c.setFillColor(colors.black)
+        y -= 20
+        
+        table_data = [["ANÁLISIS", "RESULTADO", "RANGO DE REFERENCIA"]]
+        for item in items:
+            table_data.append([item['analisis'], item['resultado'], item['rango']])
+        
+        t = Table(table_data, colWidths=[200, 150, 200])
+        t.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1C9CD4")),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,0), 10),
+            ('BOTTOMPADDING', (0,0), (-1,0), 8),
+            ('GRID', (0,0), (-1,-1), 1, colors.black),
+            ('FONTNAME', (0,1), (-1,-1), 'Helvetica'),
+            ('FONTSIZE', (0,1), (-1,-1), 9),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ]))
+        t.wrapOn(c, w-100, h)
+        t.drawOn(c, 50, y - 20 - len(table_data)*20)
+        y = y - 20 - len(table_data)*20 - 30
+        
+        if y < 100:
+            c.showPage()
+            y = h - 50
+            c.setFont("Helvetica-Bold", 16)
+            c.drawString(150, y, nombre_sistema)
+            c.setFont("Helvetica", 10)
+            c.drawString(150, y-18, "INFORME DE RESULTADOS DE LABORATORIO")
+            y -= 50
+    
     if sello_path and os.path.exists(os.path.join('static', sello_path)):
-        try: c.drawImage(os.path.join('static', sello_path), w-150, y_sello, width=100, height=80, preserveAspectRatio=True)
-        except: pass
+        try:
+            c.drawImage(os.path.join('static', sello_path), w-150, y-80, width=100, height=80, preserveAspectRatio=True)
+        except:
+            pass
+    
     c.setFont("Helvetica-Bold", 10)
-    c.setFillColor(colors.green if orden_data[8]==1 else colors.red)
-    c.drawString(50, y_sello+40, "VALIDADO" if orden_data[8]==1 else "NO VALIDADO")
-    c.setFont("Helvetica", 9)
+    c.setFillColor(colors.green if orden_data[9] else colors.red)
+    c.drawString(50, y-40, "VALIDADO" if orden_data[9] else "NO VALIDADO")
     c.setFillColor(colors.black)
-    c.drawString(50, y_sello+25, f"Tecnólogo: {orden_data[10] or 'No asignado'}")
-    c.drawString(50, y_sello+10, f"Fecha: {orden_data[7] or 'N/A'}")
+    c.setFont("Helvetica", 10)
+    c.drawString(50, y-60, f"Responsable: {orden_data[10] or 'No asignado'}")
+    c.drawString(50, y-80, f"Fecha: {orden_data[8] or 'N/A'}")
+    
     c.setFont("Helvetica-Oblique", 8)
     c.setFillColor(colors.grey)
-    c.drawString(30,30,pie)
+    c.drawString(30, 30, pie)
     c.save()
     buf.seek(0)
     return send_file(buf, as_attachment=True, download_name=f"Resultado_Lab_{id_orden}.pdf", mimetype='application/pdf')
@@ -1600,10 +2067,6 @@ def atencion_medica():
     if q:
         sql += " AND (p.nombre LIKE ? OR p.apellido LIKE ? OR p.dni LIKE ? OR c.id LIKE ? OR p.historia_clinica LIKE ? OR c.numero_boleta LIKE ?)"
         params = [f'%{q}%', f'%{q}%', f'%{q}%', f'%{q}%', f'%{q}%', f'%{q}%']
-    if session.get('rol') == 'medico':
-        # Filtramos por médico asociado al usuario? No tenemos relación, pero podemos filtrar por citas donde id_medico = médico del usuario.
-        # Para simplificar, no filtramos, mostramos todas las citas pagadas.
-        pass
     sql += " ORDER BY c.fecha_cita DESC"
     ejecutar_consulta(cur, sql, params)
     citas = cur.fetchall()
@@ -1628,7 +2091,6 @@ def atender_cita(id_cita):
         diag = request.form['diagnostico']
         trat = request.form['tratamiento']
         desc = int(request.form['descanso'])
-        # Obtener id_medico de la cita
         ejecutar_consulta(cur, "SELECT id_medico FROM citas WHERE id=?", (id_cita,))
         id_med = cur.fetchone()[0]
         ejecutar_consulta(cur, "INSERT INTO diagnosticos (id_cita, id_medico, diagnostico, tratamiento, descanso_medico_dias, informe_pdf_path) VALUES (?,?,?,?,?,?)",
@@ -2004,6 +2466,7 @@ def configuracion_sistema():
             <li class="nav-item"><a class="nav-link" href="{{ url_for('configuracion_sistema', tab='medicamentos') }}">💊 Medicamentos</a></li>
             <li class="nav-item"><a class="nav-link" href="{{ url_for('configuracion_sistema', tab='examenes') }}">Exámenes</a></li>
             <li class="nav-item"><a class="nav-link" href="{{ url_for('configuracion_sistema', tab='procedimientos') }}">Procedimientos</a></li>
+            <li class="nav-item"><a class="nav-link" href="{{ url_for('configuracion_sistema', tab='secciones') }}">📂 Secciones Lab</a></li>
         </ul>
         <div class="tab-content active">
             <form method="POST">
@@ -2332,6 +2795,81 @@ def configuracion_sistema():
         nombre_sistema = config[0] if config else 'SISGALENO2026'
         base = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido)
         return render_template_string(base, nombre_sistema=nombre_sistema, user_modules=get_user_modules(session.get('rol')), procedimientos=procedimientos)
+
+    # ===== NUEVA PESTAÑA: SECCIONES LAB =====
+    elif tab == 'secciones':
+        if request.method == 'POST':
+            accion = request.form.get('accion')
+            if accion == 'agregar':
+                nombre = request.form.get('nombre_seccion', '').strip().upper()
+                if nombre:
+                    try:
+                        if IS_POSTGRES:
+                            ejecutar_consulta(cur, "INSERT INTO secciones_parametros (nombre) VALUES (%s)", (nombre,))
+                        else:
+                            ejecutar_consulta(cur, "INSERT OR IGNORE INTO secciones_parametros (nombre) VALUES (?)", (nombre,))
+                        conn.commit()
+                        flash('Sección agregada correctamente.', 'success')
+                    except Exception as e:
+                        flash(f'Error: {str(e)}', 'danger')
+            elif accion == 'eliminar':
+                id_sec = request.form.get('id_seccion')
+                if id_sec:
+                    ejecutar_consulta(cur, "SELECT COUNT(*) FROM examenes_parametros WHERE id_seccion=?", (id_sec,))
+                    count_cat = cur.fetchone()[0]
+                    ejecutar_consulta(cur, "SELECT COUNT(*) FROM parametros_extra_orden WHERE id_seccion=?", (id_sec,))
+                    count_extra = cur.fetchone()[0]
+                    if count_cat > 0 or count_extra > 0:
+                        flash('No se puede eliminar: la sección está en uso por parámetros.', 'danger')
+                    else:
+                        ejecutar_consulta(cur, "DELETE FROM secciones_parametros WHERE id=?", (id_sec,))
+                        conn.commit()
+                        flash('Sección eliminada.', 'success')
+            return redirect(url_for('configuracion_sistema', tab='secciones'))
+        
+        ejecutar_consulta(cur, "SELECT id, nombre, orden FROM secciones_parametros ORDER BY orden")
+        secciones = cur.fetchall()
+        conn.close()
+        
+        contenido = """
+        <h2>📂 Secciones de Laboratorio</h2>
+        <p>Las secciones permiten agrupar los parámetros de los exámenes (ej. Hematología, Bioquímica).</p>
+        <form method="POST" class="row g-2 mb-3">
+            <input type="hidden" name="accion" value="agregar">
+            <div class="col-md-8">
+                <label>Nueva sección</label>
+                <input type="text" name="nombre_seccion" class="form-control" required placeholder="Ej. HEMATOLOGIA">
+            </div>
+            <div class="col-md-4">
+                <button class="btn btn-primary mt-2">Agregar</button>
+            </div>
+        </form>
+        <table class="table">
+            <thead><tr><th>Nombre</th><th>Orden</th><th>Acción</th></tr></thead>
+            <tbody>
+                {% for s in secciones %}
+                <tr>
+                    <td>{{ s[1] }}</td>
+                    <td>{{ s[2] }}</td>
+                    <td>
+                        <form style="display:inline;" method="POST" onsubmit="return confirm('¿Eliminar esta sección?')">
+                            <input type="hidden" name="accion" value="eliminar">
+                            <input type="hidden" name="id_seccion" value="{{ s[0] }}">
+                            <button class="btn btn-danger btn-sm">🗑️</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="3">No hay secciones definidas.</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <a href="{{ url_for('configuracion_sistema', tab='general') }}" class="btn btn-secondary">Volver</a>
+        """
+        config = obtener_configuracion()
+        nombre_sistema = config[0] if config else 'SISGALENO2026'
+        base = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido)
+        return render_template_string(base, nombre_sistema=nombre_sistema, user_modules=get_user_modules(session.get('rol')), secciones=secciones)
 
     conn.close()
     return redirect(url_for('configuracion_sistema'))
