@@ -655,17 +655,18 @@ LAYOUT_BASE = """
 @app.route('/')
 def index():
     return redirect(url_for('login' if not session.get('usuario') else 'dashboard'))
-
-@app.route('/login', methods=['GET','POST'])
-def login():
-    if session.get('usuario'):
-        return redirect(url_for('dashboard'))
-    if request.method == 'POST':
-        user = request.form['usuario']
-        pwd = request.form['password']
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id, rol, password_hash FROM usuarios WHERE usuario=?", (user,))
+def ejecutar_consulta(cursor, query, params):
+    """Ejecuta una consulta reemplazando ? por %s si es PostgreSQL."""
+    if IS_POSTGRES:
+        # Reemplazar ? por %s
+        query = query.replace('?', '%s')
+    cursor.execute(query, params)
+if IS_POSTGRES:
+    ejecutar_consulta(cur, "SELECT ... WHERE usuario=?", (user,))
+else:
+    cur.execute("SELECT id, rol, password_hash FROM usuarios WHERE usuario=?", (user,))
+else:
+    cur.execute("SELECT id, rol, password_hash FROM usuarios WHERE usuario=?", (user,))
         data = cur.fetchone()
         conn.close()
         if data and check_password_hash(data[2], pwd):
