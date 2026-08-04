@@ -20,7 +20,7 @@ from reportlab.lib import colors
 import barcode
 from barcode.writer import ImageWriter
 from PIL import Image
-from functools import wraps  # <--- CAMBIO 1: Import necesario para el decorador
+from functools import wraps
 
 load_dotenv()
 app = Flask(__name__)
@@ -28,7 +28,7 @@ app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
 app.config['UPLOAD_FOLDER'] = 'static'
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
 
-# ========================== CAMBIO 2: DECORADOR DE AUTENTICACIÓN ==========================
+# ========================== DECORADOR DE AUTENTICACIÓN ==========================
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -56,13 +56,12 @@ def init_db():
     cursor = conn.cursor()
     if IS_POSTGRES:
         auto_inc = "SERIAL"
-        conflict = "ON CONFLICT DO NOTHING"
         text = "TEXT"
     else:
         auto_inc = "INTEGER PRIMARY KEY AUTOINCREMENT"
-        conflict = ""
         text = "TEXT"
 
+    # ---------- CREAR TABLAS ----------
     # Usuarios
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS usuarios (
         id {auto_inc},
@@ -110,13 +109,21 @@ def init_db():
         cursor.execute("ALTER TABLE pacientes ADD COLUMN IF NOT EXISTS nro_afiliacion TEXT")
         cursor.execute("ALTER TABLE pacientes ADD COLUMN IF NOT EXISTS deleted INTEGER DEFAULT 0")
 
-    # Servicios
-    cursor.execute(f'''CREATE TABLE IF NOT EXISTS servicios ( id {auto_inc}, nombre {text} NOT NULL, precio_base REAL DEFAULT 0 )''')
-    for s in [('MEDICINA GENERAL',50),('MEDICINA INTERNA',60),('MEDICINA FISICA',40),('PEDIATRIA',35),('GINECOLOGIA',70),('TRAUMATOLOGIA',65),('CIRUGIA',100),('OTROS',50)]:
+    # Servicios (CORREGIDO: sin ON CONFLICT)
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS servicios (
+        id {auto_inc},
+        nombre {text} NOT NULL,
+        precio_base REAL DEFAULT 0
+    )''')
+    # Insertar servicios sin depender de ON CONFLICT
+    servicios_data = [('MEDICINA GENERAL',50),('MEDICINA INTERNA',60),('MEDICINA FISICA',40),('PEDIATRIA',35),('GINECOLOGIA',70),('TRAUMATOLOGIA',65),('CIRUGIA',100),('OTROS',50)]
+    for nombre, precio in servicios_data:
         if IS_POSTGRES:
-            cursor.execute("INSERT INTO servicios (nombre, precio_base) VALUES (%s,%s) ON CONFLICT (nombre) DO NOTHING", s)
+            cursor.execute("SELECT 1 FROM servicios WHERE nombre = %s", (nombre,))
+            if not cursor.fetchone():
+                cursor.execute("INSERT INTO servicios (nombre, precio_base) VALUES (%s,%s)", (nombre, precio))
         else:
-            cursor.execute("INSERT OR IGNORE INTO servicios (nombre, precio_base) VALUES (?,?)", s)
+            cursor.execute("INSERT OR IGNORE INTO servicios (nombre, precio_base) VALUES (?,?)", (nombre, precio))
 
     # Citas
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS citas (
@@ -148,15 +155,29 @@ def init_db():
     )''')
 
     # Exámenes catálogo
-    cursor.execute(f'''CREATE TABLE IF NOT EXISTS examenes_catalogo ( id {auto_inc}, codigo {text}, descripcion {text} NOT NULL, precio REAL DEFAULT 0 )''')
-    for e in [(1,'145','HEMOGRAMA COMPLETO',50),(2,'G002','GLUCOSA EN AYUNAS',20)]:
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS examenes_catalogo (
+        id {auto_inc},
+        codigo {text},
+        descripcion {text} NOT NULL,
+        precio REAL DEFAULT 0
+    )''')
+    examenes_data = [(1,'145','HEMOGRAMA COMPLETO',50),(2,'G002','GLUCOSA EN AYUNAS',20)]
+    for id_ex, cod, desc, precio in examenes_data:
         if IS_POSTGRES:
-            cursor.execute("INSERT INTO examenes_catalogo (id,codigo,descripcion,precio) VALUES (%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING", e)
+            cursor.execute("INSERT INTO examenes_catalogo (id,codigo,descripcion,precio) VALUES (%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING", (id_ex, cod, desc, precio))
         else:
-            cursor.execute("INSERT OR IGNORE INTO examenes_catalogo (id,codigo,descripcion,precio) VALUES (?,?,?,?)", e)
+            cursor.execute("INSERT OR IGNORE INTO examenes_catalogo (id,codigo,descripcion,precio) VALUES (?,?,?,?)", (id_ex, cod, desc, precio))
 
     # Parámetros
-    cursor.execute(f'''CREATE TABLE IF NOT EXISTS examenes_parametros ( id {auto_inc}, id_examen_catalogo INTEGER, nombre_parametro {text} NOT NULL, unidad {text}, rango_referencia {text}, orden INTEGER DEFAULT 0, FOREIGN KEY(id_examen_catalogo) REFERENCES examenes_catalogo(id) )''')
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS examenes_parametros (
+        id {auto_inc},
+        id_examen_catalogo INTEGER,
+        nombre_parametro {text} NOT NULL,
+        unidad {text},
+        rango_referencia {text},
+        orden INTEGER DEFAULT 0,
+        FOREIGN KEY(id_examen_catalogo) REFERENCES examenes_catalogo(id)
+    )''')
 
     # Órdenes laboratorio
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS ordenes_laboratorio (
@@ -197,13 +218,35 @@ def init_db():
         cursor.execute("ALTER TABLE ordenes_laboratorio ADD COLUMN IF NOT EXISTS validado INTEGER DEFAULT 0")
 
     # Resultados lab
-    cursor.execute(f'''CREATE TABLE IF NOT EXISTS resultados_lab ( id {auto_inc}, id_orden INTEGER, id_parametro INTEGER, resultado {text}, FOREIGN KEY(id_orden) REFERENCES ordenes_laboratorio(id), FOREIGN KEY(id_parametro) REFERENCES examenes_parametros(id) )''')
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS resultados_lab (
+        id {auto_inc},
+        id_orden INTEGER,
+        id_parametro INTEGER,
+        resultado {text},
+        FOREIGN KEY(id_orden) REFERENCES ordenes_laboratorio(id),
+        FOREIGN KEY(id_parametro) REFERENCES examenes_parametros(id)
+    )''')
 
     # Imágenes
-    cursor.execute(f'''CREATE TABLE IF NOT EXISTS imagenes_laboratorio ( id {auto_inc}, id_orden INTEGER, nombre_archivo {text}, ruta_archivo {text}, FOREIGN KEY(id_orden) REFERENCES ordenes_laboratorio(id) )''')
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS imagenes_laboratorio (
+        id {auto_inc},
+        id_orden INTEGER,
+        nombre_archivo {text},
+        ruta_archivo {text},
+        FOREIGN KEY(id_orden) REFERENCES ordenes_laboratorio(id)
+    )''')
 
-    # Diagnósticos (id_medico referencia a medicos.id)
-    cursor.execute(f'''CREATE TABLE IF NOT EXISTS diagnosticos ( id {auto_inc}, id_cita INTEGER, id_medico INTEGER, diagnostico {text}, tratamiento {text}, descanso_medico_dias INTEGER, informe_pdf_path {text}, FOREIGN KEY(id_cita) REFERENCES citas(id) )''')
+    # Diagnósticos
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS diagnosticos (
+        id {auto_inc},
+        id_cita INTEGER,
+        id_medico INTEGER,
+        diagnostico {text},
+        tratamiento {text},
+        descanso_medico_dias INTEGER,
+        informe_pdf_path {text},
+        FOREIGN KEY(id_cita) REFERENCES citas(id)
+    )''')
 
     # Configuración sistema
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS configuracion_sistema (
@@ -232,14 +275,20 @@ def init_db():
     cursor.execute("INSERT OR IGNORE INTO configuracion_sistema (id) VALUES (1)")
 
     # Módulos
-    cursor.execute(f'''CREATE TABLE IF NOT EXISTS config_modulos ( id {auto_inc}, nombre {text} UNIQUE NOT NULL, activo INTEGER DEFAULT 1, descripcion {text} )''')
-    for mod, desc in [('Admisión','Gestión de pacientes y citas'),('Caja','Cobros y emisión de boletas'),('Laboratorio','Procesamiento de muestras y resultados'),('Atención Médica','Evaluación médica e informes clínicos'),('Configuración','Panel de control del sistema')]:
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS config_modulos (
+        id {auto_inc},
+        nombre {text} UNIQUE NOT NULL,
+        activo INTEGER DEFAULT 1,
+        descripcion {text}
+    )''')
+    modulos_data = [('Admisión','Gestión de pacientes y citas'),('Caja','Cobros y emisión de boletas'),('Laboratorio','Procesamiento de muestras y resultados'),('Atención Médica','Evaluación médica e informes clínicos'),('Configuración','Panel de control del sistema')]
+    for nombre, desc in modulos_data:
         if IS_POSTGRES:
-            cursor.execute("INSERT INTO config_modulos (nombre, descripcion) VALUES (%s,%s) ON CONFLICT (nombre) DO NOTHING", (mod,desc))
+            cursor.execute("INSERT INTO config_modulos (nombre, descripcion) VALUES (%s,%s) ON CONFLICT (nombre) DO NOTHING", (nombre, desc))
         else:
-            cursor.execute("INSERT OR IGNORE INTO config_modulos (nombre, descripcion) VALUES (?,?)", (mod,desc))
+            cursor.execute("INSERT OR IGNORE INTO config_modulos (nombre, descripcion) VALUES (?,?)", (nombre, desc))
 
-    # Médicos (con nombre y apellido)
+    # Médicos
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS medicos (
         id {auto_inc},
         nombre {text} NOT NULL,
@@ -270,14 +319,15 @@ def init_db():
         id {auto_inc},
         rol {text} NOT NULL,
         modulo {text} NOT NULL,
-        UNIQUE(rol, modulo) ON CONFLICT IGNORE
+        UNIQUE(rol, modulo)
     )''')
-    for r,m in [('administrador','Admisión'),('administrador','Caja'),('administrador','Laboratorio'),('administrador','Atención Médica'),('administrador','Configuración'),
-                ('medico','Admisión'),('medico','Caja'),('medico','Atención Médica'),('laboratorista','Laboratorio'),('tecnologo','Laboratorio'),('enfermera','Admisión')]:
+    permisos_data = [('administrador','Admisión'),('administrador','Caja'),('administrador','Laboratorio'),('administrador','Atención Médica'),('administrador','Configuración'),
+                    ('medico','Admisión'),('medico','Caja'),('medico','Atención Médica'),('laboratorista','Laboratorio'),('tecnologo','Laboratorio'),('enfermera','Admisión')]
+    for rol, modulo in permisos_data:
         if IS_POSTGRES:
-            cursor.execute("INSERT INTO permisos_roles (rol, modulo) VALUES (%s,%s) ON CONFLICT DO NOTHING", (r,m))
+            cursor.execute("INSERT INTO permisos_roles (rol, modulo) VALUES (%s,%s) ON CONFLICT (rol, modulo) DO NOTHING", (rol, modulo))
         else:
-            cursor.execute("INSERT OR IGNORE INTO permisos_roles (rol, modulo) VALUES (?,?)", (r,m))
+            cursor.execute("INSERT OR IGNORE INTO permisos_roles (rol, modulo) VALUES (?,?)", (rol, modulo))
 
     # Procedimientos
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS procedimientos (
@@ -288,13 +338,14 @@ def init_db():
         precio REAL DEFAULT 0,
         activo BOOLEAN DEFAULT TRUE
     )''')
-    for cod,nom,tip,prec in [('71020','EXAMEN RADIOLOGICO, TORAX, FRONTAL Y LATERAL','examen',50),('71015','EXAMEN RADIOLOGICO, TORAX; ESTEREOTÁCTICO, FRONTAL','examen',45),('71010','EXAMEN RADIOLOGICO, TORAX; INCIDENCIA FRONTAL','examen',40),('ECO01','Ecografía Obstétrica','procedimiento',80),('ECO02','Ecografía General','procedimiento',70),('TOM01','Tomografía Computarizada','procedimiento',150)]:
+    procedimientos_data = [('71020','EXAMEN RADIOLOGICO, TORAX, FRONTAL Y LATERAL','examen',50),('71015','EXAMEN RADIOLOGICO, TORAX; ESTEREOTÁCTICO, FRONTAL','examen',45),('71010','EXAMEN RADIOLOGICO, TORAX; INCIDENCIA FRONTAL','examen',40),('ECO01','Ecografía Obstétrica','procedimiento',80),('ECO02','Ecografía General','procedimiento',70),('TOM01','Tomografía Computarizada','procedimiento',150)]
+    for cod, nombre, tipo, precio in procedimientos_data:
         if IS_POSTGRES:
-            cursor.execute("INSERT INTO procedimientos (codigo,nombre,tipo,precio) VALUES (%s,%s,%s,%s) ON CONFLICT (codigo) DO NOTHING", (cod,nom,tip,prec))
+            cursor.execute("INSERT INTO procedimientos (codigo, nombre, tipo, precio) VALUES (%s,%s,%s,%s) ON CONFLICT (codigo) DO NOTHING", (cod, nombre, tipo, precio))
         else:
-            cursor.execute("INSERT OR IGNORE INTO procedimientos (codigo,nombre,tipo,precio) VALUES (?,?,?,?)", (cod,nom,tip,prec))
+            cursor.execute("INSERT OR IGNORE INTO procedimientos (codigo, nombre, tipo, precio) VALUES (?,?,?,?)", (cod, nombre, tipo, precio))
 
-    # Recetas (id_medico referencia a medicos.id)
+    # Recetas
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS recetas (
         id {auto_inc},
         id_cita INTEGER,
@@ -320,7 +371,12 @@ def init_db():
         FOREIGN KEY(id_receta) REFERENCES recetas(id) ON DELETE CASCADE,
         FOREIGN KEY(id_procedimiento) REFERENCES procedimientos(id)
     )''')
-    cursor.execute(f'''CREATE TABLE IF NOT EXISTS farmacias ( id {auto_inc}, nombre {text} NOT NULL, direccion {text}, telefono {text} )''')
+    cursor.execute(f'''CREATE TABLE IF NOT EXISTS farmacias (
+        id {auto_inc},
+        nombre {text} NOT NULL,
+        direccion {text},
+        telefono {text}
+    )''')
 
     # Autorizaciones eliminación
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS autorizaciones_eliminacion (
@@ -346,11 +402,12 @@ def init_db():
         fecha_vencimiento DATE,
         laboratorio {text}
     )''')
-    for cod,nom,desc,prec,stock,um,act,fv,lab in [('PARA001','Paracetamol','Analgésico y antipirético',5.50,100,'tableta',1,None,'Bayer'),('IBU001','Ibuprofeno','Antiinflamatorio',8.00,80,'tableta',1,None,'Pfizer'),('AMO001','Amoxicilina','Antibiótico',12.50,50,'cápsula',1,None,'Sandoz')]:
+    medicamentos_data = [('PARA001','Paracetamol','Analgésico y antipirético',5.50,100,'tableta',1,None,'Bayer'),('IBU001','Ibuprofeno','Antiinflamatorio',8.00,80,'tableta',1,None,'Pfizer'),('AMO001','Amoxicilina','Antibiótico',12.50,50,'cápsula',1,None,'Sandoz')]
+    for cod, nombre, desc, precio, stock, unidad, activo, fecha_venc, laboratorio in medicamentos_data:
         if IS_POSTGRES:
-            cursor.execute("INSERT INTO medicamentos (codigo,nombre,descripcion,precio,stock,unidad_medida,activo,fecha_vencimiento,laboratorio) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (codigo) DO NOTHING", (cod,nom,desc,prec,stock,um,act,fv,lab))
+            cursor.execute("INSERT INTO medicamentos (codigo, nombre, descripcion, precio, stock, unidad_medida, activo, fecha_vencimiento, laboratorio) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (codigo) DO NOTHING", (cod, nombre, desc, precio, stock, unidad, activo, fecha_venc, laboratorio))
         else:
-            cursor.execute("INSERT OR IGNORE INTO medicamentos (codigo,nombre,descripcion,precio,stock,unidad_medida,activo,fecha_vencimiento,laboratorio) VALUES (?,?,?,?,?,?,?,?,?)", (cod,nom,desc,prec,stock,um,act,fv,lab))
+            cursor.execute("INSERT OR IGNORE INTO medicamentos (codigo, nombre, descripcion, precio, stock, unidad_medida, activo, fecha_vencimiento, laboratorio) VALUES (?,?,?,?,?,?,?,?,?)", (cod, nombre, desc, precio, stock, unidad, activo, fecha_venc, laboratorio))
 
     conn.commit()
     conn.close()
@@ -1915,7 +1972,6 @@ def imprimir_receta_pdf(id_receta):
 
 # ========================== CONFIGURACIÓN ==========================
 @app.route('/configuracion', methods=['GET','POST'])
-# ========================== CAMBIO 3: AGREGADO EL DECORADOR LOGIN_REQUIRED ==========================
 @login_required
 def configuracion_sistema():
     if 'Configuración' not in get_user_modules(session.get('rol')):
@@ -2001,7 +2057,10 @@ def configuracion_sistema():
             rol = request.form.get('rol')
             modulo = request.form.get('modulo')
             if rol and modulo:
-                cur.execute("INSERT OR IGNORE INTO permisos_roles (rol, modulo) VALUES (?,?)", (rol, modulo))
+                if IS_POSTGRES:
+                    cur.execute("INSERT INTO permisos_roles (rol, modulo) VALUES (%s,%s) ON CONFLICT (rol, modulo) DO NOTHING", (rol, modulo))
+                else:
+                    cur.execute("INSERT OR IGNORE INTO permisos_roles (rol, modulo) VALUES (?,?)", (rol, modulo))
                 conn.commit()
                 flash('Permiso agregado.', 'success')
             return redirect(url_for('configuracion_sistema', tab='roles'))
@@ -2030,7 +2089,10 @@ def configuracion_sistema():
             if usuario and password and rol:
                 hashed = generate_password_hash(password)
                 try:
-                    cur.execute("INSERT INTO usuarios (usuario, password_hash, rol) VALUES (?,?,?)", (usuario, hashed, rol))
+                    if IS_POSTGRES:
+                        cur.execute("INSERT INTO usuarios (usuario, password_hash, rol) VALUES (%s,%s,%s) ON CONFLICT (usuario) DO NOTHING", (usuario, hashed, rol))
+                    else:
+                        cur.execute("INSERT OR IGNORE INTO usuarios (usuario, password_hash, rol) VALUES (?,?,?)", (usuario, hashed, rol))
                     conn.commit()
                     flash('Usuario creado.', 'success')
                 except Exception as e:
@@ -2140,8 +2202,10 @@ def configuracion_sistema():
                 lab = request.form.get('laboratorio', '')
                 fv = request.form.get('fecha_vencimiento', '')
                 try:
-                    cur.execute("""INSERT INTO medicamentos (codigo, nombre, descripcion, precio, stock, unidad_medida, laboratorio, fecha_vencimiento, activo)
-                                   VALUES (?,?,?,?,?,?,?,?,1)""", (codigo, nombre, desc, precio, stock, unidad, lab, fv if fv else None))
+                    if IS_POSTGRES:
+                        cur.execute("INSERT INTO medicamentos (codigo, nombre, descripcion, precio, stock, unidad_medida, laboratorio, fecha_vencimiento, activo) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,1)", (codigo, nombre, desc, precio, stock, unidad, lab, fv if fv else None))
+                    else:
+                        cur.execute("INSERT OR IGNORE INTO medicamentos (codigo, nombre, descripcion, precio, stock, unidad_medida, laboratorio, fecha_vencimiento, activo) VALUES (?,?,?,?,?,?,?,?,1)", (codigo, nombre, desc, precio, stock, unidad, lab, fv if fv else None))
                     conn.commit()
                     flash('Medicamento agregado.', 'success')
                 except Exception as e:
@@ -2215,7 +2279,10 @@ def configuracion_sistema():
                 cod = request.form.get('codigo', '')
                 desc = request.form['descripcion']
                 prec = request.form['precio']
-                cur.execute("INSERT INTO examenes_catalogo (codigo, descripcion, precio) VALUES (?,?,?)", (cod, desc, prec))
+                if IS_POSTGRES:
+                    cur.execute("INSERT INTO examenes_catalogo (codigo, descripcion, precio) VALUES (%s,%s,%s)", (cod, desc, prec))
+                else:
+                    cur.execute("INSERT INTO examenes_catalogo (codigo, descripcion, precio) VALUES (?,?,?)", (cod, desc, prec))
                 conn.commit()
                 flash('Examen agregado.', 'success')
             elif request.form.get('accion') == 'eliminar':
@@ -2244,7 +2311,10 @@ def configuracion_sistema():
                 nom = request.form['nombre']
                 tip = request.form['tipo']
                 prec = request.form['precio']
-                cur.execute("INSERT INTO procedimientos (codigo, nombre, tipo, precio) VALUES (?,?,?,?)", (cod, nom, tip, prec))
+                if IS_POSTGRES:
+                    cur.execute("INSERT INTO procedimientos (codigo, nombre, tipo, precio) VALUES (%s,%s,%s,%s)", (cod, nom, tip, prec))
+                else:
+                    cur.execute("INSERT INTO procedimientos (codigo, nombre, tipo, precio) VALUES (?,?,?,?)", (cod, nom, tip, prec))
                 conn.commit()
                 flash('Procedimiento agregado.', 'success')
             elif request.form.get('accion') == 'eliminar':
