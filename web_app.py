@@ -28,6 +28,10 @@ app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
 app.config['UPLOAD_FOLDER'] = 'static'
 app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
 
+# Asegurar que la carpeta static existe
+if not os.path.exists('static'):
+    os.makedirs('static')
+
 # ========================== DECORADOR DE AUTENTICACIÓN ==========================
 def login_required(f):
     @wraps(f)
@@ -1185,7 +1189,7 @@ def editar_paciente_admision(id_paciente):
     base = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido)
     return render_template_string(base, nombre_sistema=nombre_sistema, user_modules=get_user_modules(session.get('rol')))
 
-# ========================== CAJA ==========================
+# ========================== API ==========================
 @app.route('/api/buscar_pacientes')
 def api_buscar_pacientes():
     q = request.args.get('q', '').strip()
@@ -1447,7 +1451,6 @@ def caja():
                                     infoPacienteCaja.textContent = `Paciente seleccionado: ${p.nombre} ${p.apellido} (${p.dni})`;
                                     infoPacienteCaja.className = 'text-success';
                                     sugerenciasDniCaja.style.display = 'none';
-                                    // Opcional: cargar datos en otros campos si se desea
                                 });
                                 sugerenciasDniCaja.appendChild(div);
                             });
@@ -1769,8 +1772,7 @@ def laboratorio():
     function toggleForm(id){var x=document.getElementById(id);x.style.display=x.style.display==='none'?'block':'none';}
     function editarPacienteLab(id,nombre,apellido,dni){document.getElementById('edit_id_paciente').value=id;document.getElementById('edit_nombre').value=nombre;document.getElementById('edit_apellido').value=apellido;document.getElementById('edit_dni').value=dni;document.getElementById('form_editar_lab').style.display='block';}
     function buscarPaciente(){var dni=document.getElementById('dni_auto').value.trim();if(!dni){alert('Ingrese DNI');return;}fetch('/api/paciente_por_dni?dni='+dni).then(r=>r.json()).then(data=>{if(data.error){document.getElementById('datos_paciente').innerHTML='<div class="alert alert-danger">'+data.error+'</div>';document.getElementById('paciente_id').value='';document.getElementById('paciente_nombre').value='';return;}document.getElementById('paciente_id').value=data.id;document.getElementById('paciente_nombre').value=data.nombre+' '+data.apellido+' (HC: '+data.historia_clinica+')';document.getElementById('datos_paciente').innerHTML='<div class="alert alert-success">Paciente encontrado</div>';});}
-    function buscarPacientePorBoleta(){var boleta=document.getElementById('buscar_boleta_lab').value.trim();if(!boleta){alert('Ingrese número de boleta');return;}fetch('/api/buscar_por_boleta?boleta='+encodeURIComponent(boleta)).then(r=>r.json()).then(data=>{if(data.error){document.getElementById('datos_paciente_boleta').innerHTML='<div class="alert alert-danger">'+data.error+'</div>';return;}document.getElementById('paciente_id').value=data.id_paciente;document.getElementById('paciente_nombre').value=data.nombre+' '+data.apellido+' (HC: '+data.historia_clinica+')';document.getElementById('datos_paciente_boleta').innerHTML='<div class="alert alert-success">Paciente: '+data.nombre+' '+data.apellido+'<br>Servicio: '+data.servicio_nombre+'<br>Monto: S/ '+data.monto.toFixed(2)+'</div>';// Opcional: cargar el servicio automáticamente});
-    }
+    function buscarPacientePorBoleta(){var boleta=document.getElementById('buscar_boleta_lab').value.trim();if(!boleta){alert('Ingrese número de boleta');return;}fetch('/api/buscar_por_boleta?boleta='+encodeURIComponent(boleta)).then(r=>r.json()).then(data=>{if(data.error){document.getElementById('datos_paciente_boleta').innerHTML='<div class="alert alert-danger">'+data.error+'</div>';return;}document.getElementById('paciente_id').value=data.id_paciente;document.getElementById('paciente_nombre').value=data.nombre+' '+data.apellido+' (HC: '+data.historia_clinica+')';document.getElementById('datos_paciente_boleta').innerHTML='<div class="alert alert-success">Paciente: '+data.nombre+' '+data.apellido+'<br>Servicio: '+data.servicio_nombre+'<br>Monto: S/ '+data.monto.toFixed(2)+'</div>';});}
     function abrirModalEliminar(id){document.getElementById('id_paciente_modal').value=id;var modal=new bootstrap.Modal(document.getElementById('modalEliminarConPDF'));modal.show();}
     
     var examenesAgregados = [];
@@ -3137,7 +3139,7 @@ def configuracion_sistema():
     conn.close()
     return redirect(url_for('configuracion_sistema'))
 
-# ========================== SUBIR LOGO / SELLO ==========================
+# ========================== SUBIR LOGO / SELLO (CORREGIDO) ==========================
 @app.route('/configuracion/subir_logo', methods=['GET','POST'])
 def subir_logo():
     if 'Configuración' not in get_user_modules(session.get('rol')):
@@ -3154,6 +3156,9 @@ def subir_logo():
                 except:
                     flash('Imagen inválida.', 'danger')
                     return redirect(url_for('subir_logo'))
+                # Asegurar que la carpeta static existe
+                if not os.path.exists('static'):
+                    os.makedirs('static')
                 ext = file.filename.rsplit('.',1)[1].lower()
                 filename = f"logo_{uuid.uuid4().hex}.{ext}"
                 file.save(os.path.join('static', filename))
@@ -3194,6 +3199,8 @@ def subir_sello():
                 except:
                     flash('Imagen inválida.', 'danger')
                     return redirect(url_for('subir_sello'))
+                if not os.path.exists('static'):
+                    os.makedirs('static')
                 ext = file.filename.rsplit('.',1)[1].lower()
                 filename = f"sello_{uuid.uuid4().hex}.{ext}"
                 file.save(os.path.join('static', filename))
