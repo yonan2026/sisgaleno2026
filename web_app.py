@@ -1,3 +1,13 @@
+def crear_carpeta_static():
+    """Crea la carpeta static si no existe, y subcarpetas necesarias."""
+    carpetas = ['static', 'static/informes_medicos', 'static/autorizaciones_eliminacion']
+    for carpeta in carpetas:
+        if not os.path.exists(carpeta):
+            os.makedirs(carpeta)
+            print(f"Carpeta creada: {carpeta}")
+
+# Ejecutar al iniciar la aplicación
+crear_carpeta_static()
 import os
 import sqlite3
 import json
