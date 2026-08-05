@@ -86,7 +86,7 @@ def init_db():
         else:
             ejecutar_consulta(cursor, "INSERT OR IGNORE INTO usuarios (usuario, password_hash, rol) VALUES (?,?,?)", (user,h,rol))
 
-    # Pacientes (cambio: historia_clinica ya no es NOT NULL)
+    # Pacientes
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS pacientes (
         id {auto_inc},
         historia_clinica {text} UNIQUE,
@@ -476,7 +476,6 @@ def get_user_modules(rol):
     conn.close()
     return mods
 
-# ===== FUNCIÓN GENERAR HC CORREGIDA =====
 def generar_siguiente_hc():
     conn = get_db_connection()
     cur = conn.cursor()
@@ -507,20 +506,17 @@ def calcular_edad(fecha):
         return edad
     except: return 0
 
-# ===== FUNCIÓN CREAR PACIENTE CORREGIDA =====
 def crear_paciente_sistema(dni, nombre, apellido, fecha_nac='', telefono='', celular='', direccion='', sexo='', nro_afiliacion='', historia_manual=None):
     dni = (dni or '').strip()
     conn = get_db_connection()
     cur = conn.cursor()
     
-    # Verificar si el DNI ya existe
     ejecutar_consulta(cur, "SELECT id, historia_clinica FROM pacientes WHERE dni = ? LIMIT 1", (dni,))
     existente = cur.fetchone()
     if existente:
         conn.close()
-        return existente[1]  # Retorna el HC existente
+        return existente[1]
     
-    # Si se proporciona HC manual, verificar que no exista
     if historia_manual:
         historia_manual = historia_manual.strip()
         if historia_manual:
@@ -550,6 +546,33 @@ def obtener_paciente_por_dni(dni):
     conn.close()
     if row:
         return {'id':row[0], 'historia_clinica':row[1], 'nombre':row[2], 'apellido':row[3], 'fecha_nacimiento':row[4], 'edad':row[5], 'nro_afiliacion':row[6]}
+    return None
+
+def obtener_paciente_por_boleta(numero_boleta):
+    """Busca paciente y servicio asociado a una boleta de pago."""
+    conn = get_db_connection()
+    cur = conn.cursor()
+    ejecutar_consulta(cur, """SELECT p.id_paciente, pa.nombre, pa.apellido, pa.dni, pa.historia_clinica, 
+                                    c.id_servicio, s.nombre AS servicio_nombre, p.monto, p.descripcion
+                             FROM pagos p
+                             JOIN pacientes pa ON p.id_paciente = pa.id
+                             LEFT JOIN citas c ON p.id_cita = c.id
+                             LEFT JOIN servicios s ON c.id_servicio = s.id
+                             WHERE p.numero_boleta = ? AND p.estado = 'Pagado'""", (numero_boleta,))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        return {
+            'id_paciente': row[0],
+            'nombre': row[1],
+            'apellido': row[2],
+            'dni': row[3],
+            'historia_clinica': row[4],
+            'id_servicio': row[5],
+            'servicio_nombre': row[6],
+            'monto': row[7],
+            'descripcion': row[8]
+        }
     return None
 
 def generar_codigo_muestra():
@@ -626,7 +649,7 @@ app.jinja_env.globals.update(paciente_tiene_pagos=paciente_tiene_pagos)
 # ========================== MIDDLEWARE ==========================
 @app.before_request
 def proteger():
-    if request.endpoint in {'login','logout','index','static','api_paciente_por_dni','api_procedimientos'}:
+    if request.endpoint in {'login','logout','index','static','api_paciente_por_dni','api_procedimientos','api_buscar_pacientes','api_buscar_por_boleta'}:
         return None
     if not session.get('usuario'):
         return redirect(url_for('login'))
@@ -931,16 +954,54 @@ def admision():
         </div>
         <div id="form_cita" style="display:none; margin-top:15px; border-top:1px solid #ddd; padding-top:15px;">
             <h4>Nueva Cita</h4>
-            <form method="POST" action="{{ url_for('crear_cita') }}">
-                <div class="adm-form-grid">
-                    <div><label>Paciente</label><select name="id_paciente" class="form-control" required>{% for p in pacientes %}<option value="{{ p[0] }}">{{ p[1] }} - {{ p[2] }} {{ p[3] }}</option>{% endfor %}</select></div>
-                    <div><label>Servicio</label><select name="id_servicio" class="form-control" required>{% for s in servicios %}<option value="{{ s[0] }}">{{ s[1] }}</option>{% endfor %}</select></div>
-                    <div><label>Médico</label><select name="id_medico" class="form-control" required>{% for m in medicos %}<option value="{{ m[0] }}">{{ m[1] }}</option>{% endfor %}</select></div>
-                    <div><label>Fecha</label><input type="date" name="fecha_cita" class="form-control" required></div>
-                    <div><label>Hora</label><input type="time" name="hora_cita" step="60" class="form-control" required></div>
-                    <div><label>Tipo</label><select name="tipo_asegurado" class="form-control" required><option value="Demanda">Demanda</option><option value="SIS">SIS</option><option value="SOAT">SOAT</option></select></div>
+            <form method="POST" action="{{ url_for('crear_cita') }}" id="formCita">
+                <div class="row g-2">
+                    <div class="col-md-6">
+                        <label>Buscar Paciente</label>
+                        <div style="position:relative;">
+                            <input type="text" id="buscar_paciente" class="form-control" placeholder="Escriba DNI, nombre, apellido o HC..." autocomplete="off">
+                            <div id="sugerencias_pacientes" class="autocomplete-suggestions" style="display:none; position:absolute; background:white; border:1px solid #ccc; max-height:200px; overflow-y:auto; width:100%; z-index:1000;"></div>
+                        </div>
+                        <input type="hidden" name="id_paciente" id="id_paciente" required>
+                        <small id="paciente_seleccionado" class="text-muted">Ningún paciente seleccionado</small>
+                    </div>
+                    <div class="col-md-6">
+                        <label>Servicio</label>
+                        <select name="id_servicio" class="form-control" required>
+                            {% for s in servicios %}
+                            <option value="{{ s[0] }}">{{ s[1] }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label>Médico</label>
+                        <select name="id_medico" class="form-control" required>
+                            {% for m in medicos %}
+                            <option value="{{ m[0] }}">{{ m[1] }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label>Fecha</label>
+                        <input type="date" name="fecha_cita" class="form-control" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label>Hora</label>
+                        <input type="time" name="hora_cita" step="60" class="form-control" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label>Tipo</label>
+                        <select name="tipo_asegurado" class="form-control" required>
+                            <option value="Demanda">Demanda</option>
+                            <option value="SIS">SIS</option>
+                            <option value="SOAT">SOAT</option>
+                        </select>
+                    </div>
+                    <div class="col-md-12">
+                        <label>Motivo</label>
+                        <textarea name="motivo_consulta" class="form-control" rows="2"></textarea>
+                    </div>
                 </div>
-                <div class="mt-2"><label>Motivo</label><textarea name="motivo_consulta" class="form-control" rows="2"></textarea></div>
                 <button class="btn btn-primary mt-2">Agendar</button>
             </form>
         </div>
@@ -949,7 +1010,61 @@ def admision():
     <table class="table"><thead><tr><th>HC</th><th>DNI</th><th>Nombre</th><th>Apellido</th><th>Acciones</th></tr></thead><tbody>{% for p in pacientes %}<tr><td>{{ p[1] }}</td><td>{{ p[2] }}</td><td>{{ p[3] }}</td><td>{{ p[4] }}</td><td><a href="{{ url_for('editar_paciente_admision', id_paciente=p[0]) }}" class="btn btn-warning btn-sm">✏️</a></td></tr>{% else %}<tr><td colspan="5">Sin pacientes</td></tr>{% endfor %}</tbody></table>
     <h3>Citas</h3>
     <table class="table"><thead><tr><th>HC</th><th>Paciente</th><th>Servicio</th><th>Fecha</th><th>Tipo</th><th>Boleta</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>{% for c in citas %}<tr><td>{{ c[1] }}</td><td>{{ c[2] }} {{ c[3] }}</td><td>{{ c[4] }}</td><td>{{ c[5] }}</td><td>{{ c[7] }}</td><td>{{ c[8] or 'Pendiente' }}</td><td><span class="badge badge-{{ 'pagado' if c[6]=='Pagado' else 'pendiente' }}">{{ c[6] }}</span></td><td><a href="{{ url_for('imprimir_ficha_admision', id_cita=c[0]) }}" class="btn btn-primary btn-sm">📄</a></td></tr>{% else %}<tr><td colspan="8">Sin citas</td></tr>{% endfor %}</tbody></table>
-    <script>function toggleForm(id){var x=document.getElementById(id);x.style.display=x.style.display==='none'?'block':'none'}function calcularEdad(){var fn=document.getElementById('fnac').value;if(fn){var hoy=new Date();var nac=new Date(fn);var edad=hoy.getFullYear()-nac.getFullYear();var m=hoy.getMonth()-nac.getMonth();if(m<0||(m===0&&hoy.getDate()<nac.getDate()))edad--;document.getElementById('edad').value=edad}else{document.getElementById('edad').value=''}}</script>
+    <script>
+        function toggleForm(id){var x=document.getElementById(id);x.style.display=x.style.display==='none'?'block':'none';}
+        function calcularEdad(){var fn=document.getElementById('fnac').value;if(fn){var hoy=new Date();var nac=new Date(fn);var edad=hoy.getFullYear()-nac.getFullYear();var m=hoy.getMonth()-nac.getMonth();if(m<0||(m===0&&hoy.getDate()<nac.getDate()))edad--;document.getElementById('edad').value=edad;}else{document.getElementById('edad').value='';}}
+        // Búsqueda de pacientes para nueva cita
+        const inputBuscarPaciente = document.getElementById('buscar_paciente');
+        const sugerenciasDiv = document.getElementById('sugerencias_pacientes');
+        const idPacienteHidden = document.getElementById('id_paciente');
+        const pacienteSeleccionado = document.getElementById('paciente_seleccionado');
+        let timeoutBusqueda = null;
+        if (inputBuscarPaciente) {
+            inputBuscarPaciente.addEventListener('input', function() {
+                const q = this.value.trim();
+                if (q.length < 2) { sugerenciasDiv.style.display = 'none'; return; }
+                clearTimeout(timeoutBusqueda);
+                timeoutBusqueda = setTimeout(() => {
+                    fetch('/api/buscar_pacientes?q=' + encodeURIComponent(q))
+                        .then(r => r.json())
+                        .then(data => {
+                            sugerenciasDiv.innerHTML = '';
+                            if (data.length === 0) {
+                                sugerenciasDiv.innerHTML = '<div class="p-2 text-muted">No se encontraron pacientes</div>';
+                            } else {
+                                data.forEach(p => {
+                                    const div = document.createElement('div');
+                                    div.className = 'p-2 hover-bg-light';
+                                    div.style.cursor = 'pointer';
+                                    div.textContent = `${p.historia_clinica || 'S/HC'} - ${p.dni} - ${p.nombre} ${p.apellido}`;
+                                    div.addEventListener('click', function() {
+                                        inputBuscarPaciente.value = `${p.historia_clinica || 'S/HC'} - ${p.dni} - ${p.nombre} ${p.apellido}`;
+                                        idPacienteHidden.value = p.id;
+                                        pacienteSeleccionado.textContent = `Paciente seleccionado: ${p.nombre} ${p.apellido} (${p.dni})`;
+                                        pacienteSeleccionado.className = 'text-success';
+                                        sugerenciasDiv.style.display = 'none';
+                                    });
+                                    sugerenciasDiv.appendChild(div);
+                                });
+                            }
+                            sugerenciasDiv.style.display = 'block';
+                        });
+                }, 300);
+            });
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('#buscar_paciente') && !e.target.closest('#sugerencias_pacientes')) {
+                    sugerenciasDiv.style.display = 'none';
+                }
+            });
+            document.getElementById('formCita').addEventListener('submit', function(e) {
+                if (!idPacienteHidden.value) {
+                    e.preventDefault();
+                    alert('Debe seleccionar un paciente de la lista de búsqueda.');
+                    inputBuscarPaciente.focus();
+                }
+            });
+        }
+    </script>
     """
     config = obtener_configuracion()
     nombre_sistema = config[0] if config else 'SISGALENO2026'
@@ -1071,6 +1186,74 @@ def editar_paciente_admision(id_paciente):
     return render_template_string(base, nombre_sistema=nombre_sistema, user_modules=get_user_modules(session.get('rol')))
 
 # ========================== CAJA ==========================
+@app.route('/api/buscar_pacientes')
+def api_buscar_pacientes():
+    q = request.args.get('q', '').strip()
+    if not q or len(q) < 2:
+        return jsonify([])
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    if IS_POSTGRES:
+        query = """SELECT id, historia_clinica, dni, nombre, apellido
+                   FROM pacientes 
+                   WHERE deleted=0 AND (
+                       dni ILIKE %s OR 
+                       nombre ILIKE %s OR 
+                       apellido ILIKE %s OR 
+                       historia_clinica ILIKE %s
+                   )
+                   ORDER BY nombre, apellido
+                   LIMIT 20"""
+        params = (f'%{q}%', f'%{q}%', f'%{q}%', f'%{q}%')
+    else:
+        query = """SELECT id, historia_clinica, dni, nombre, apellido
+                   FROM pacientes 
+                   WHERE deleted=0 AND (
+                       dni LIKE ? OR 
+                       nombre LIKE ? OR 
+                       apellido LIKE ? OR 
+                       historia_clinica LIKE ?
+                   )
+                   ORDER BY nombre, apellido
+                   LIMIT 20"""
+        params = (f'%{q}%', f'%{q}%', f'%{q}%', f'%{q}%')
+    
+    ejecutar_consulta(cur, query, params)
+    results = cur.fetchall()
+    conn.close()
+    
+    return jsonify([
+        {
+            'id': r[0],
+            'historia_clinica': r[1] or '',
+            'dni': r[2],
+            'nombre': r[3],
+            'apellido': r[4]
+        }
+        for r in results
+    ])
+
+@app.route('/api/paciente_por_dni')
+def api_paciente_por_dni():
+    dni = request.args.get('dni', '').strip()
+    if not dni:
+        return jsonify({'error':'DNI requerido'}), 400
+    p = obtener_paciente_por_dni(dni)
+    if p:
+        return jsonify(p)
+    return jsonify({'error':'Paciente no encontrado'}), 404
+
+@app.route('/api/buscar_por_boleta')
+def api_buscar_por_boleta():
+    boleta = request.args.get('boleta', '').strip()
+    if not boleta:
+        return jsonify({'error':'Número de boleta requerido'}), 400
+    data = obtener_paciente_por_boleta(boleta)
+    if data:
+        return jsonify(data)
+    return jsonify({'error':'Boleta no encontrada o no pagada'}), 404
+
 @app.route('/caja', methods=['GET','POST'])
 def caja():
     if 'Caja' not in get_user_modules(session.get('rol')):
@@ -1204,9 +1387,18 @@ def caja():
         </div>
         <div id="form_cobro_directo" style="display:none; margin-top:15px; border-top:1px solid #ddd; padding-top:15px;">
             <h4>Nuevo Cobro</h4>
-            <form method="POST"><input type="hidden" name="accion" value="registrar_cobro_directo">
+            <form method="POST" id="formCobro">
+                <input type="hidden" name="accion" value="registrar_cobro_directo">
                 <div class="row g-2">
-                    <div class="col-md-4"><label>Paciente</label><select name="id_paciente" class="form-control" required>{% for p in pacientes %}<option value="{{ p[0] }}">{{ p[2] }} - {{ p[3] }} {{ p[4] }}</option>{% endfor %}</select></div>
+                    <div class="col-md-4">
+                        <label>Buscar Paciente por DNI</label>
+                        <div style="position:relative;">
+                            <input type="text" id="buscar_dni_caja" class="form-control" placeholder="Ingrese DNI..." autocomplete="off">
+                            <div id="sugerencias_dni_caja" class="autocomplete-suggestions" style="display:none; position:absolute; background:white; border:1px solid #ccc; max-height:150px; overflow-y:auto; width:100%; z-index:1000;"></div>
+                        </div>
+                        <input type="hidden" name="id_paciente" id="id_paciente_caja">
+                        <small id="info_paciente_caja" class="text-muted">Ingrese DNI para buscar o registre nuevo</small>
+                    </div>
                     <div class="col-md-4"><label>Tipo</label><select name="tipo_item" id="tipo_item" class="form-control" required><option value="servicio">Servicio</option><option value="laboratorio" selected>Laboratorio</option><option value="analisis">Análisis</option><option value="atencion">Atención</option></select></div>
                     <div class="col-md-4" id="bloque_servicio" style="display:none;"><label>Servicio</label><select name="id_servicio" id="id_servicio" class="form-control">{% for s in servicios %}<option value="{{ s[0] }}" data-precio="{{ s[2] }}">{{ s[1] }} (S/ {{ s[2] }})</option>{% endfor %}</select></div>
                 </div>
@@ -1225,6 +1417,58 @@ def caja():
     <table class="table"><thead><tr><th>Boleta</th><th>Paciente</th><th>Concepto</th><th>Fecha</th><th>Monto</th><th>Acciones</th></tr></thead><tbody>{% for h in historial %}<tr><td>{{ h[1] }}</td><td>{{ h[5] }} {{ h[6] }}</td><td>{{ h[4] }}</td><td>{{ h[3] }}</td><td>S/ {{ h[2] }}</td><td><a href="{{ url_for('imprimir_boleta_pdf', id_pago=h[0]) }}" class="btn btn-warning btn-sm">🖨️</a></td></tr>{% else %}<tr><td colspan="6">Sin boletas</td></tr>{% endfor %}</tbody></table>
     <script>
     function toggleForm(id){var x=document.getElementById(id);x.style.display=x.style.display==='none'?'block':'none';}
+    // Búsqueda de paciente por DNI en Caja
+    const inputDniCaja = document.getElementById('buscar_dni_caja');
+    const sugerenciasDniCaja = document.getElementById('sugerencias_dni_caja');
+    const idPacienteCaja = document.getElementById('id_paciente_caja');
+    const infoPacienteCaja = document.getElementById('info_paciente_caja');
+    let timeoutDni = null;
+    if (inputDniCaja) {
+        inputDniCaja.addEventListener('input', function() {
+            const q = this.value.trim();
+            if (q.length < 2) { sugerenciasDniCaja.style.display = 'none'; return; }
+            clearTimeout(timeoutDni);
+            timeoutDni = setTimeout(() => {
+                fetch('/api/buscar_pacientes?q=' + encodeURIComponent(q))
+                    .then(r => r.json())
+                    .then(data => {
+                        sugerenciasDniCaja.innerHTML = '';
+                        if (data.length === 0) {
+                            sugerenciasDniCaja.innerHTML = '<div class="p-2 text-muted">No se encontraron pacientes</div>';
+                        } else {
+                            data.forEach(p => {
+                                const div = document.createElement('div');
+                                div.className = 'p-2 hover-bg-light';
+                                div.style.cursor = 'pointer';
+                                div.textContent = `${p.historia_clinica || 'S/HC'} - ${p.dni} - ${p.nombre} ${p.apellido}`;
+                                div.addEventListener('click', function() {
+                                    inputDniCaja.value = p.dni;
+                                    idPacienteCaja.value = p.id;
+                                    infoPacienteCaja.textContent = `Paciente seleccionado: ${p.nombre} ${p.apellido} (${p.dni})`;
+                                    infoPacienteCaja.className = 'text-success';
+                                    sugerenciasDniCaja.style.display = 'none';
+                                    // Opcional: cargar datos en otros campos si se desea
+                                });
+                                sugerenciasDniCaja.appendChild(div);
+                            });
+                        }
+                        sugerenciasDniCaja.style.display = 'block';
+                    });
+            }, 300);
+        });
+        document.addEventListener('click', function(e) {
+            if (!e.target.closest('#buscar_dni_caja') && !e.target.closest('#sugerencias_dni_caja')) {
+                sugerenciasDniCaja.style.display = 'none';
+            }
+        });
+        document.getElementById('formCobro').addEventListener('submit', function(e) {
+            if (!idPacienteCaja.value) {
+                e.preventDefault();
+                alert('Debe seleccionar o registrar un paciente válido.');
+                inputDniCaja.focus();
+            }
+        });
+    }
     var tipoItem=document.getElementById('tipo_item'), bloqueServicio=document.getElementById('bloque_servicio'), bloqueExamenes=document.getElementById('bloque_examenes'), montoInput=document.getElementById('monto'), servicioSelect=document.getElementById('id_servicio'), examenesSelect=document.getElementById('id_examenes'), pacienteSelect=document.querySelector('select[name="id_paciente"]'), resumenPaciente=document.getElementById('resumen_paciente_contenido'), pagosResumen={{ pagos_resumen_json|safe }}, selectExamenes=document.getElementById('id_examenes'), cuerpoSeleccion=document.getElementById('cuerpo-seleccion'), totalSeleccion=document.getElementById('total-seleccion'), resumenDiv=document.getElementById('resumen-seleccion');
     function obtenerSeleccionExamenes(){if(!examenesSelect)return[];return Array.from(examenesSelect.selectedOptions||[]).map(function(o){return{nombre:o.textContent.split('(')[0].trim(),precio:parseFloat(o.getAttribute('data-precio')||0)};});}
     function calcularMonto(){var tipo=tipoItem?tipoItem.value:'';var total=0;if(tipo==='servicio'||tipo==='atencion'){var so=servicioSelect?servicioSelect.options[servicioSelect.selectedIndex]:null;total=so?parseFloat(so.getAttribute('data-precio')||0):0;}else if(tipo==='laboratorio'||tipo==='analisis'){var sel=obtenerSeleccionExamenes();total=sel.reduce(function(s,i){return s+i.precio;},0);}if(montoInput)montoInput.value=total.toFixed(2);actualizarResumenPaciente();}
@@ -1279,16 +1523,6 @@ def imprimir_boleta_pdf(id_pago):
     return send_file(buffer, as_attachment=download, download_name=f'boleta_{id_pago}.pdf', mimetype='application/pdf')
 
 # ========================== LABORATORIO ==========================
-@app.route('/api/paciente_por_dni')
-def api_paciente_por_dni():
-    dni = request.args.get('dni', '').strip()
-    if not dni:
-        return jsonify({'error':'DNI requerido'}), 400
-    p = obtener_paciente_por_dni(dni)
-    if p:
-        return jsonify(p)
-    return jsonify({'error':'Paciente no encontrado'}), 404
-
 @app.route('/laboratorio', methods=['GET','POST'])
 def laboratorio():
     if 'Laboratorio' not in get_user_modules(session.get('rol')):
@@ -1366,7 +1600,6 @@ def laboratorio():
                 flash("Seleccione paciente.", 'danger')
                 return redirect(url_for('laboratorio'))
             
-            # Recibir lista de exámenes seleccionados
             examenes_ids = request.form.getlist('examenes_ids[]')
             examen_manual = request.form.get('examen_manual', '').strip()
             
@@ -1379,7 +1612,6 @@ def laboratorio():
             fecha_emision = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             ordenes_creadas = []
             
-            # Procesar exámenes del catálogo
             if examenes_ids:
                 for id_examen in examenes_ids:
                     id_examen = int(id_examen)
@@ -1392,7 +1624,6 @@ def laboratorio():
                                 (id_paciente, id_examen, fecha_emision, precio, codigo_muestra, fecha_validez))
                     ordenes_creadas.append(cur.lastrowid)
             
-            # Examen manual
             if examen_manual:
                 precio_manual = float(request.form.get('precio_manual', 0))
                 ejecutar_consulta(cur, """INSERT INTO ordenes_laboratorio 
@@ -1410,7 +1641,6 @@ def laboratorio():
     ejecutar_consulta(cur, "SELECT id, descripcion, precio FROM examenes_catalogo")
     examenes = cur.fetchall()
     
-    # Pendientes
     sql_pend = """SELECT o.id, p.nombre, p.apellido, COALESCE(e.descripcion, o.examen_manual, o.servicio_manual) AS descripcion,
                   o.estado, o.codigo_muestra, o.fecha_validez,
                   CASE WHEN EXISTS (SELECT 1 FROM pagos pg WHERE pg.id_paciente = o.id_paciente AND pg.estado='Pagado' AND (LOWER(pg.descripcion) LIKE '%' || LOWER(COALESCE(e.descripcion, o.examen_manual, o.servicio_manual)) || '%' OR LOWER(pg.descripcion) LIKE '%laboratorio%' OR LOWER(pg.descripcion) LIKE '%análisis%')) THEN 'Pagado' ELSE 'Pendiente' END AS estado_pago,
@@ -1459,6 +1689,14 @@ def laboratorio():
             <h4>Nueva Orden de Laboratorio</h4>
             <div class="p-3 bg-light rounded mb-3">
                 <div class="row g-2">
+                    <div class="col-md-4"><label>Buscar por Boleta Electrónica</label><input type="text" id="buscar_boleta_lab" class="form-control" placeholder="Ingrese número de boleta..."></div>
+                    <div class="col-md-2"><button onclick="buscarPacientePorBoleta()" class="btn btn-info">Buscar</button></div>
+                    <div class="col-md-2"><a href="{{ url_for('admision') }}" class="btn btn-warning">Registrar</a></div>
+                </div>
+                <div id="datos_paciente_boleta" class="mt-2 text-muted">Ingrese número de boleta</div>
+            </div>
+            <div class="p-3 bg-light rounded mb-3">
+                <div class="row g-2">
                     <div class="col-md-4"><label>DNI</label><input type="text" id="dni_auto" class="form-control" placeholder="Buscar"></div>
                     <div class="col-md-2"><button onclick="buscarPaciente()" class="btn btn-info">Buscar</button></div>
                     <div class="col-md-2"><a href="{{ url_for('admision') }}" class="btn btn-warning">Registrar</a></div>
@@ -1472,8 +1710,6 @@ def laboratorio():
                     <div class="col-md-6"><label>Paciente</label><input type="text" id="paciente_nombre" class="form-control" disabled></div>
                     <div class="col-md-6"><label>Código de muestra</label><input type="text" id="codigo_muestra_preview" class="form-control" disabled value="(se generará al guardar)"></div>
                 </div>
-                
-                <!-- Agregar exámenes -->
                 <div class="mt-3 border p-3 rounded">
                     <h5>Agregar exámenes</h5>
                     <div class="row g-2">
@@ -1497,8 +1733,6 @@ def laboratorio():
                         <input type="number" id="precio_manual_input" class="form-control mt-1" placeholder="Precio manual" step="0.01" style="display:none;">
                     </div>
                 </div>
-
-                <!-- Lista de exámenes agregados -->
                 <div class="mt-3">
                     <h5>Exámenes agregados</h5>
                     <table class="table table-sm" id="tabla_examenes_agregados">
@@ -1513,9 +1747,7 @@ def laboratorio():
                         </tfoot>
                     </table>
                 </div>
-
                 <div id="examenes_ids_container"></div>
-
                 <button class="btn btn-success mt-2" onclick="return validarYEnviar()">Crear Orden</button>
                 <button type="button" class="btn btn-secondary mt-2" onclick="toggleForm('form_orden_lab')">Cancelar</button>
             </form>
@@ -1537,6 +1769,8 @@ def laboratorio():
     function toggleForm(id){var x=document.getElementById(id);x.style.display=x.style.display==='none'?'block':'none';}
     function editarPacienteLab(id,nombre,apellido,dni){document.getElementById('edit_id_paciente').value=id;document.getElementById('edit_nombre').value=nombre;document.getElementById('edit_apellido').value=apellido;document.getElementById('edit_dni').value=dni;document.getElementById('form_editar_lab').style.display='block';}
     function buscarPaciente(){var dni=document.getElementById('dni_auto').value.trim();if(!dni){alert('Ingrese DNI');return;}fetch('/api/paciente_por_dni?dni='+dni).then(r=>r.json()).then(data=>{if(data.error){document.getElementById('datos_paciente').innerHTML='<div class="alert alert-danger">'+data.error+'</div>';document.getElementById('paciente_id').value='';document.getElementById('paciente_nombre').value='';return;}document.getElementById('paciente_id').value=data.id;document.getElementById('paciente_nombre').value=data.nombre+' '+data.apellido+' (HC: '+data.historia_clinica+')';document.getElementById('datos_paciente').innerHTML='<div class="alert alert-success">Paciente encontrado</div>';});}
+    function buscarPacientePorBoleta(){var boleta=document.getElementById('buscar_boleta_lab').value.trim();if(!boleta){alert('Ingrese número de boleta');return;}fetch('/api/buscar_por_boleta?boleta='+encodeURIComponent(boleta)).then(r=>r.json()).then(data=>{if(data.error){document.getElementById('datos_paciente_boleta').innerHTML='<div class="alert alert-danger">'+data.error+'</div>';return;}document.getElementById('paciente_id').value=data.id_paciente;document.getElementById('paciente_nombre').value=data.nombre+' '+data.apellido+' (HC: '+data.historia_clinica+')';document.getElementById('datos_paciente_boleta').innerHTML='<div class="alert alert-success">Paciente: '+data.nombre+' '+data.apellido+'<br>Servicio: '+data.servicio_nombre+'<br>Monto: S/ '+data.monto.toFixed(2)+'</div>';// Opcional: cargar el servicio automáticamente});
+    }
     function abrirModalEliminar(id){document.getElementById('id_paciente_modal').value=id;var modal=new bootstrap.Modal(document.getElementById('modalEliminarConPDF'));modal.show();}
     
     var examenesAgregados = [];
@@ -1661,7 +1895,6 @@ def ingresar_resultado(id_orden):
     conn = get_db_connection()
     cur = conn.cursor()
     
-    # Datos de la orden
     ejecutar_consulta(cur, """SELECT o.id, p.nombre, p.apellido, p.dni, p.edad, p.sexo, 
                                     COALESCE(e.descripcion, o.examen_manual, o.servicio_manual) AS examen,
                                     o.id_examen, o.examen_manual, o.servicio_manual, o.estado
@@ -1675,11 +1908,9 @@ def ingresar_resultado(id_orden):
         flash('Orden no encontrada', 'danger')
         return redirect(url_for('laboratorio'))
     
-    # Secciones
     ejecutar_consulta(cur, "SELECT id, nombre FROM secciones_parametros ORDER BY orden")
     lista_secciones = cur.fetchall()
     
-    # Parámetros del catálogo
     parametros = []
     resultados_existentes = {}
     if orden[7]:
@@ -1691,7 +1922,6 @@ def ingresar_resultado(id_orden):
         ejecutar_consulta(cur, "SELECT id_parametro, resultado FROM resultados_lab WHERE id_orden=?", (id_orden,))
         resultados_existentes = {r[0]: r[1] for r in cur.fetchall()}
     
-    # Parámetros extra
     ejecutar_consulta(cur, "SELECT id, nombre_analisis, resultado, rango_referencia, id_seccion FROM parametros_extra_orden WHERE id_orden=?", (id_orden,))
     parametros_extra = cur.fetchall()
     conn.close()
@@ -1700,7 +1930,6 @@ def ingresar_resultado(id_orden):
         conn = get_db_connection()
         cur = conn.cursor()
         
-        # Guardar parámetros de catálogo
         for p in parametros:
             id_param = p[0]
             resultado = request.form.get(f'param_{id_param}', '').strip()
@@ -1710,7 +1939,6 @@ def ingresar_resultado(id_orden):
                                           DO UPDATE SET resultado=excluded.resultado""", 
                                  (id_orden, id_param, resultado))
         
-        # Guardar parámetros extra
         analisis_list = request.form.getlist('extra_analisis[]')
         resultado_list = request.form.getlist('extra_resultado[]')
         rango_list = request.form.getlist('extra_rango[]')
@@ -1742,7 +1970,6 @@ def ingresar_resultado(id_orden):
                                           VALUES (?,?,?,?,?)""",
                                  (id_orden, analisis, resultado, rango, seccion if seccion else None))
         
-        # Actualizar estado
         ahora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         validado = 1 if session.get('rol') == 'tecnologo' else 0
         ejecutar_consulta(cur, """UPDATE ordenes_laboratorio 
@@ -1755,7 +1982,6 @@ def ingresar_resultado(id_orden):
         flash('Resultados guardados correctamente.', 'success')
         return redirect(url_for('laboratorio'))
     
-    # ===== FORMULARIO HTML =====
     contenido = """
     <h2>Procesar Orden #{{ id_orden }}</h2>
     <div class="bg-light p-3 mb-3">
@@ -2834,7 +3060,6 @@ def configuracion_sistema():
         base = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido)
         return render_template_string(base, nombre_sistema=nombre_sistema, user_modules=get_user_modules(session.get('rol')), procedimientos=procedimientos)
 
-    # ===== NUEVA PESTAÑA: SECCIONES LAB =====
     elif tab == 'secciones':
         if request.method == 'POST':
             accion = request.form.get('accion')
