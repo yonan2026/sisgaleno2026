@@ -86,10 +86,10 @@ def init_db():
         else:
             ejecutar_consulta(cursor, "INSERT OR IGNORE INTO usuarios (usuario, password_hash, rol) VALUES (?,?,?)", (user,h,rol))
 
-    # Pacientes
+    # Pacientes (cambio: historia_clinica ya no es NOT NULL)
     cursor.execute(f'''CREATE TABLE IF NOT EXISTS pacientes (
         id {auto_inc},
-        historia_clinica {text} UNIQUE NOT NULL,
+        historia_clinica {text} UNIQUE,
         dni {text} UNIQUE NOT NULL,
         nombre {text} NOT NULL,
         apellido {text} NOT NULL,
@@ -196,7 +196,6 @@ def init_db():
         orden INTEGER DEFAULT 0,
         id_seccion INTEGER REFERENCES secciones_parametros(id)
     )''')
-    # Para compatibilidad con SQLite, agregar columna id_seccion si no existe
     if not IS_POSTGRES:
         cursor.execute("PRAGMA table_info(examenes_parametros)")
         cols = [row[1] for row in cursor.fetchall()]
@@ -477,17 +476,19 @@ def get_user_modules(rol):
     conn.close()
     return mods
 
+# ===== FUNCIÓN GENERAR HC CORREGIDA =====
 def generar_siguiente_hc():
     conn = get_db_connection()
     cur = conn.cursor()
     ejecutar_consulta(cur, "SELECT historia_clinica FROM pacientes WHERE historia_clinica IS NOT NULL AND deleted=0")
     hs = {r[0] for r in cur.fetchall()}
     conn.close()
-    n=1
+    n = 1
     while True:
-        hc=f"HC-{n:04d}"
-        if hc not in hs: return hc
-        n+=1
+        hc = f"HC-{n:04d}"
+        if hc not in hs:
+            return hc
+        n += 1
 
 def generar_siguiente_boleta():
     conn = get_db_connection()
@@ -506,16 +507,33 @@ def calcular_edad(fecha):
         return edad
     except: return 0
 
-def crear_paciente_sistema(dni, nombre, apellido, fecha_nac='', telefono='', celular='', direccion='', sexo='', nro_afiliacion=''):
+# ===== FUNCIÓN CREAR PACIENTE CORREGIDA =====
+def crear_paciente_sistema(dni, nombre, apellido, fecha_nac='', telefono='', celular='', direccion='', sexo='', nro_afiliacion='', historia_manual=None):
     dni = (dni or '').strip()
     conn = get_db_connection()
     cur = conn.cursor()
+    
+    # Verificar si el DNI ya existe
     ejecutar_consulta(cur, "SELECT id, historia_clinica FROM pacientes WHERE dni = ? LIMIT 1", (dni,))
     existente = cur.fetchone()
     if existente:
         conn.close()
-        return existente[1]
-    hc = generar_siguiente_hc()
+        return existente[1]  # Retorna el HC existente
+    
+    # Si se proporciona HC manual, verificar que no exista
+    if historia_manual:
+        historia_manual = historia_manual.strip()
+        if historia_manual:
+            ejecutar_consulta(cur, "SELECT 1 FROM pacientes WHERE historia_clinica = ?", (historia_manual,))
+            if cur.fetchone():
+                conn.close()
+                raise ValueError(f"La historia clínica '{historia_manual}' ya existe.")
+            hc = historia_manual
+        else:
+            hc = generar_siguiente_hc()
+    else:
+        hc = generar_siguiente_hc()
+    
     edad = calcular_edad(fecha_nac) if fecha_nac else 0
     ejecutar_consulta(cur, """INSERT INTO pacientes (historia_clinica, dni, nombre, apellido, fecha_nacimiento, telefono, celular, direccion, sexo, edad, nro_afiliacion, deleted)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,0)""",
@@ -866,8 +884,11 @@ def admision():
         direccion = request.form.get('direccion', '')
         sexo = request.form.get('sexo', '')
         nro_af = request.form.get('nro_afiliacion', '')
+        historia_manual = request.form.get('historia_clinica', '').strip()
+        if not historia_manual:
+            historia_manual = None
         try:
-            hc = crear_paciente_sistema(dni, nombre, apellido, fecha_nac, telefono, celular, direccion, sexo, nro_af)
+            hc = crear_paciente_sistema(dni, nombre, apellido, fecha_nac, telefono, celular, direccion, sexo, nro_af, historia_manual)
             flash(f"Paciente {nombre} {apellido} registrado (HC: {hc}).", 'success')
         except Exception as e:
             flash(f"Error: {str(e)}", 'danger')
@@ -900,6 +921,7 @@ def admision():
                     <div><label>Edad</label><input type="number" name="edad" id="edad" class="form-control" readonly></div>
                     <div><label>Sexo</label><select name="sexo" class="form-control"><option value="">Seleccione</option><option value="Masculino">Masculino</option><option value="Femenino">Femenino</option><option value="Otro">Otro</option></select></div>
                     <div><label>Nº Afiliación</label><input type="text" name="nro_afiliacion" class="form-control"></div>
+                    <div><label>Historia Clínica</label><input type="text" name="historia_clinica" class="form-control" placeholder="Opcional - dejar vacío para auto-generar"></div>
                     <div><label>Teléfono</label><input type="text" name="telefono" class="form-control"></div>
                     <div><label>Celular</label><input type="text" name="celular" class="form-control"></div>
                     <div style="grid-column:span 2;"><label>Dirección</label><input type="text" name="direccion" class="form-control"></div>
@@ -1061,8 +1083,11 @@ def caja():
             dni = request.form['dni']
             nombre = request.form['nombre']
             apellido = request.form['apellido']
+            historia_manual = request.form.get('historia_clinica', '').strip()
+            if not historia_manual:
+                historia_manual = None
             try:
-                hc = crear_paciente_sistema(dni, nombre, apellido)
+                hc = crear_paciente_sistema(dni, nombre, apellido, '', '', '', '', '', '', historia_manual)
                 flash(f"Paciente registrado (HC: {hc}).", 'success')
             except Exception as e:
                 flash(f"Error: {str(e)}", 'danger')
@@ -1168,9 +1193,12 @@ def caja():
         <div id="form_paciente_caja" style="display:none; margin-top:15px; border-top:1px solid #ddd; padding-top:15px;">
             <h4>Registrar Paciente</h4>
             <form method="POST"><input type="hidden" name="accion" value="registrar_paciente_caja">
-                <div class="row g-2"><div class="col-md-4"><label>DNI</label><input type="text" name="dni" class="form-control" required></div>
-                <div class="col-md-4"><label>Nombre</label><input type="text" name="nombre" class="form-control" required></div>
-                <div class="col-md-4"><label>Apellido</label><input type="text" name="apellido" class="form-control" required></div></div>
+                <div class="row g-2">
+                    <div class="col-md-4"><label>DNI</label><input type="text" name="dni" class="form-control" required></div>
+                    <div class="col-md-4"><label>Nombre</label><input type="text" name="nombre" class="form-control" required></div>
+                    <div class="col-md-4"><label>Apellido</label><input type="text" name="apellido" class="form-control" required></div>
+                    <div class="col-md-4"><label>Historia Clínica</label><input type="text" name="historia_clinica" class="form-control" placeholder="Opcional - dejar vacío para auto-generar"></div>
+                </div>
                 <button class="btn btn-primary mt-2">Guardar</button>
             </form>
         </div>
@@ -1273,8 +1301,11 @@ def laboratorio():
             dni = request.form['dni']
             nombre = request.form['nombre']
             apellido = request.form['apellido']
+            historia_manual = request.form.get('historia_clinica', '').strip()
+            if not historia_manual:
+                historia_manual = None
             try:
-                hc = crear_paciente_sistema(dni, nombre, apellido)
+                hc = crear_paciente_sistema(dni, nombre, apellido, '', '', '', '', '', '', historia_manual)
                 flash(f"Paciente agregado (HC: {hc}).", 'success')
             except Exception as e:
                 flash(f"Error: {str(e)}", 'danger')
@@ -1414,7 +1445,15 @@ def laboratorio():
         <div class="d-flex gap-2 flex-wrap"><button onclick="toggleForm('form_paciente_lab')" class="btn btn-success">+ Paciente</button><button onclick="toggleForm('form_orden_lab')" class="btn btn-primary">+ Nueva Orden</button></div>
         <div id="form_paciente_lab" style="display:none; margin-top:15px; border-top:1px solid #ddd; padding-top:15px;">
             <h4>Registrar Paciente</h4>
-            <form method="POST"><input type="hidden" name="accion" value="registrar_paciente_lab"><div class="row g-2"><div class="col-md-4"><label>DNI</label><input type="text" name="dni" class="form-control" required></div><div class="col-md-4"><label>Nombre</label><input type="text" name="nombre" class="form-control" required></div><div class="col-md-4"><label>Apellido</label><input type="text" name="apellido" class="form-control" required></div></div><button class="btn btn-success mt-2">Guardar</button></form>
+            <form method="POST"><input type="hidden" name="accion" value="registrar_paciente_lab">
+                <div class="row g-2">
+                    <div class="col-md-4"><label>DNI</label><input type="text" name="dni" class="form-control" required></div>
+                    <div class="col-md-4"><label>Nombre</label><input type="text" name="nombre" class="form-control" required></div>
+                    <div class="col-md-4"><label>Apellido</label><input type="text" name="apellido" class="form-control" required></div>
+                    <div class="col-md-4"><label>Historia Clínica</label><input type="text" name="historia_clinica" class="form-control" placeholder="Opcional - dejar vacío para auto-generar"></div>
+                </div>
+                <button class="btn btn-success mt-2">Guardar</button>
+            </form>
         </div>
         <div id="form_orden_lab" style="display:none; margin-top:15px; border-top:1px solid #ddd; padding-top:15px;">
             <h4>Nueva Orden de Laboratorio</h4>
@@ -1580,7 +1619,6 @@ def laboratorio():
                 input.value = ex.id;
                 container.appendChild(input);
             } else {
-                // Para manual, usar campos separados
                 var inputNom = document.createElement('input');
                 inputNom.type = 'hidden';
                 inputNom.name = 'examen_manual';
