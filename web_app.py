@@ -2637,12 +2637,7 @@ def init_db():
     conn = get_db_connection()
     try:
         cur = conn.cursor()
-                # ===== BORRAR TODO PARA RECREAR (Solo por esta vez) =====
-        if IS_POSTGRES:
-            cur.execute("DROP SCHEMA public CASCADE")
-            cur.execute("CREATE SCHEMA public")
-            conn.commit()
-            print("Base de datos antigua eliminada. Recreando...")
+                
         # Crear TODAS las tablas necesarias para que los módulos funcionen
         cur.execute("""
             CREATE TABLE IF NOT EXISTS configuracion_sistema (
