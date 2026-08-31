@@ -2499,7 +2499,6 @@ def configuracion_sistema():
 @app.route('/configuracion/subir_logo', methods=['GET','POST'])
 @login_required
 def subir_logo():
-    if 'Configuración' not in get_user_modules(session.get('rol')): return redirect(url_for('dashboard'))
      if request.method == 'POST':
         file = request.files.get('logo_archivo')
         if file and file.filename:
@@ -2510,7 +2509,6 @@ def subir_logo():
                 base64_str = base64.b64encode(file_data).decode('utf-8')
                 mime_type = file.mimetype or 'image/jpeg'
                 data_uri = f"data:{mime_type};base64,{base64_str}"
-                
                 conn = get_db_connection(); cur = conn.cursor()
                 cur.execute("UPDATE configuracion_sistema SET logo_path=? WHERE id=1", (data_uri,))
                 conn.commit(); conn.close()
@@ -2519,7 +2517,7 @@ def subir_logo():
             else: flash('Formato no permitido.', 'danger')
         else: flash('Seleccione un archivo.', 'danger')
         return redirect(url_for('subir_logo'))
-    contenido = """<h2>Subir Logo</h2><form method="POST" enctype="multipart/form-data"><div class="mb-3"><input type="file" name="logo_archivo" accept="image/*" class="form-control" required></div><button class="btn btn-success">Subir</button><a href="{{ url_for('configuracion_sistema') }}" class="btn btn-secondary">Cancelar</a></form>"""
+     contenido = """<h2>Subir Logo</h2><form method="POST" enctype="multipart/form-data"><div class="mb-3"><input type="file" name="logo_archivo" accept="image/*" class="form-control" required></div><button class="btn btn-success">Subir</button><a href="{{ url_for('configuracion_sistema') }}" class="btn btn-secondary">Cancelar</a></form>"""
     config = obtener_configuracion()
     nombre_sistema = config[0] if config else 'SISGALENO2026'
     system_bg = config[12] if config and len(config) > 12 else ''
@@ -2531,7 +2529,7 @@ def subir_logo():
 @app.route('/configuracion/subir_sello', methods=['GET','POST'])
 @login_required
 def subir_sello():
-        if request.method == 'POST':
+            if request.method == 'POST':
         file = request.files.get('sello_archivo')
         if file and file.filename:
             import base64
@@ -2541,7 +2539,6 @@ def subir_sello():
                 base64_str = base64.b64encode(file_data).decode('utf-8')
                 mime_type = file.mimetype or 'image/jpeg'
                 data_uri = f"data:{mime_type};base64,{base64_str}"
-                
                 conn = get_db_connection(); cur = conn.cursor()
                 cur.execute("UPDATE configuracion_sistema SET sello_path=? WHERE id=1", (data_uri,))
                 conn.commit(); conn.close()
@@ -2550,7 +2547,7 @@ def subir_sello():
             else: flash('Formato no permitido.', 'danger')
         else: flash('Seleccione un archivo.', 'danger')
         return redirect(url_for('subir_sello'))
-    contenido = """<h2>Subir Sello</h2><form method="POST" enctype="multipart/form-data"><div class="mb-3"><input type="file" name="sello_archivo" accept="image/*" class="form-control" required></div><button class="btn btn-success">Subir</button><a href="{{ url_for('configuracion_sistema') }}" class="btn btn-secondary">Cancelar</a></form>"""
+            contenido = """<h2>Subir Sello</h2><form method="POST" enctype="multipart/form-data"><div class="mb-3"><input type="file" name="sello_archivo" accept="image/*" class="form-control" required></div><button class="btn btn-success">Subir</button><a href="{{ url_for('configuracion_sistema') }}" class="btn btn-secondary">Cancelar</a></form>"""
     config = obtener_configuracion()
     nombre_sistema = config[0] if config else 'SISGALENO2026'
     system_bg = config[12] if config and len(config) > 12 else ''
@@ -2562,7 +2559,7 @@ def subir_sello():
 @app.route('/configuracion/subir_fondo_login', methods=['GET','POST'])
 @login_required
 def subir_fondo_login():
-        if request.method == 'POST':
+            if request.method == 'POST':
         file = request.files.get('fondo_archivo')
         if file and file.filename:
             import base64
@@ -2572,7 +2569,6 @@ def subir_fondo_login():
                 base64_str = base64.b64encode(file_data).decode('utf-8')
                 mime_type = file.mimetype or 'image/jpeg'
                 data_uri = f"data:{mime_type};base64,{base64_str}"
-                
                 conn = get_db_connection(); cur = conn.cursor()
                 cur.execute("UPDATE configuracion_sistema SET login_background=? WHERE id=1", (data_uri,))
                 conn.commit(); conn.close()
@@ -2581,7 +2577,7 @@ def subir_fondo_login():
             else: flash('Formato no permitido.', 'danger')
         else: flash('Seleccione un archivo.', 'danger')
         return redirect(url_for('subir_fondo_login'))
-    contenido = """<h2>Subir Fondo de Login</h2><form method="POST" enctype="multipart/form-data"><div class="mb-3"><input type="file" name="fondo_archivo" accept="image/*" class="form-control" required></div><button class="btn btn-success">Subir</button><a href="{{ url_for('configuracion_sistema') }}" class="btn btn-secondary">Cancelar</a></form>"""
+            contenido = """<h2>Subir Fondo de Login</h2><form method="POST" enctype="multipart/form-data"><div class="mb-3"><input type="file" name="fondo_archivo" accept="image/*" class="form-control" required></div><button class="btn btn-success">Subir</button><a href="{{ url_for('configuracion_sistema') }}" class="btn btn-secondary">Cancelar</a></form>"""
     config = obtener_configuracion()
     nombre_sistema = config[0] if config else 'SISGALENO2026'
     system_bg = config[12] if config and len(config) > 12 else ''
