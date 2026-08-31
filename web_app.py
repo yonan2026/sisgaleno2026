@@ -60,31 +60,32 @@ TICKET_80MM = (80 * 28.35, 297 * 28.35)
 TICKET_80MM_LANDSCAPE = (297 * 28.35, 80 * 28.35)
 MEDIA_CARTA = (216 * 28.35 / 2, 279 * 28.35 / 2)
 
+# ... (tu código anterior)
+
+from psycopg2.extensions import connection as _connection
+
+class PatchedConnection(_connection):
+    def cursor(self, *args, **kwargs):
+        cursor = super().cursor(*args, **kwargs)
+        original_execute = cursor.execute
+
+        def execute_with_psycopg(sql, params=None):
+            if '?' in sql:
+                sql = sql.replace('?', '%s')
+            if params is None:
+                return original_execute(sql)
+            return original_execute(sql, params)
+
+        cursor.execute = execute_with_psycopg
+        return cursor
+
 def get_db_connection():
     if IS_POSTGRES:
-        conn = psycopg2.connect(DATABASE_URL)
-        
-        # === PARCHE PARA COMPATIBILIDAD (CONVIERTE ? A %s) ===
-        original_cursor = conn.cursor
-        def patched_cursor(*args, **kwargs):
-            cursor = original_cursor(*args, **kwargs)
-            original_execute = cursor.execute
-            
-            def execute_with_psycopg(sql, params=None):
-                # Reemplazamos ? por %s automáticamente
-                if '?' in sql:
-                    sql = sql.replace('?', '%s')
-                if params is None:
-                    return original_execute(sql)
-                return original_execute(sql, params)
-            
-            cursor.execute = execute_with_psycopg
-            return cursor
-        
-        conn.cursor = patched_cursor
-        return conn
+        return psycopg2.connect(DATABASE_URL, connection_factory=PatchedConnection)
     else:
         return sqlite3.connect('sisgaleno2026.db')
+
+# ... (tu código siguiente)
 # ========================== PLANTILLA DEFAULT ==========================
 PLANTILLA_DEFAULT_RESULTADO = """
 <!DOCTYPE html>
