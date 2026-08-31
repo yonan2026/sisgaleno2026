@@ -991,7 +991,7 @@ def caja():
     pacientes = cur.fetchall()
     conn.close()
     contenido = """
-    <h2>💰 Caja</h2>
+    <h2>💰$ Caja</h2>
     <ul class="nav nav-tabs" id="cajaTab" role="tablist">
         <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#cobrar_orden">Cobrar Orden</a></li>
         <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#cobro_directo">Cobro Directo</a></li>
@@ -1897,7 +1897,7 @@ def enfermeria():
     total_pacientes = cur.fetchone()[0]
     conn.close()
     contenido = """
-    <h2>🏥 Módulo de Enfermería</h2>
+    <h2>🏥► Módulo de Enfermería</h2>
     <div class="row mt-4">
         <div class="col-md-3"><div class="card"><div class="card-body"><h5>Citas hoy</h5><h2>{{ citas_hoy }}</h2></div></div></div>
         <div class="col-md-3"><div class="card"><div class="card-body"><h5>Triajes hoy</h5><h2>{{ triajes_hoy }}</h2></div></div></div>
