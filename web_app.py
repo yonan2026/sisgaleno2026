@@ -722,179 +722,273 @@ def reportes():
 
 # ========================== MÓDULO ADMISIÓN ==========================
 @app.route('/admision', methods=['GET','POST'])
-@login_required
 def admision():
     if 'Admisión' not in get_user_modules(session.get('rol')):
         return redirect(url_for('dashboard'))
     if request.method == 'POST' and request.form.get('accion') == 'registrar_paciente':
-        dni = request.form['dni']; nombre = request.form['nombre']; apellido = request.form['apellido']
-        fecha_nac = request.form.get('fecha_nacimiento', ''); telefono = request.form.get('telefono', '')
-        celular = request.form.get('celular', ''); direccion = request.form.get('direccion', '')
-        sexo = request.form.get('sexo', ''); nro_af = request.form.get('nro_afiliacion', '')
+        dni = request.form['dni']
+        nombre = request.form['nombre']
+        apellido = request.form['apellido']
+        fecha_nac = request.form.get('fecha_nacimiento', '')
+        telefono = request.form.get('telefono', '')
+        celular = request.form.get('celular', '')
+        direccion = request.form.get('direccion', '')
+        sexo = request.form.get('sexo', '')
+        nro_af = request.form.get('nro_afiliacion', '')
+        historia_manual = request.form.get('historia_clinica', '').strip()
+        if not historia_manual:
+            historia_manual = None
         try:
-            hc = crear_paciente_sistema(dni, nombre, apellido, fecha_nac, telefono, celular, direccion, sexo, nro_af)
+            hc = crear_paciente_sistema(dni, nombre, apellido, fecha_nac, telefono, celular, direccion, sexo, nro_af, historia_manual)
             flash(f"Paciente {nombre} {apellido} registrado (HC: {hc}).", 'success')
         except Exception as e:
             flash(f"Error: {str(e)}", 'danger')
         return redirect(url_for('admision'))
-    conn = get_db_connection(); cur = conn.cursor()
-    cur.execute("SELECT id, historia_clinica, dni, nombre, apellido FROM pacientes WHERE deleted=0 ORDER BY id DESC")
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+    ejecutar_consulta(cur, "SELECT id, historia_clinica, dni, nombre, apellido FROM pacientes WHERE deleted=0 ORDER BY id DESC")
     pacientes = cur.fetchall()
-    cur.execute("SELECT id, nombre FROM servicios")
+    ejecutar_consulta(cur, "SELECT id, nombre FROM servicios")
     servicios = cur.fetchall()
-    cur.execute("SELECT id, nombre || ' ' || apellido AS nombre_completo FROM medicos WHERE activo=1 ORDER BY nombre")
+    ejecutar_consulta(cur, "SELECT id, nombre || ' ' || apellido AS nombre_completo FROM medicos WHERE activo=1 ORDER BY nombre")
     medicos = cur.fetchall()
-    cur.execute("""SELECT c.id, p.historia_clinica, p.nombre, p.apellido, s.nombre, c.fecha_cita, c.estado, c.tipo_asegurado, c.numero_boleta, c.numero_orden
+    ejecutar_consulta(cur, """SELECT c.id, p.historia_clinica, p.nombre, p.apellido, s.nombre, c.fecha_cita, c.estado, c.tipo_asegurado, c.numero_boleta
                    FROM citas c JOIN pacientes p ON c.id_paciente = p.id JOIN servicios s ON c.id_servicio = s.id WHERE p.deleted=0 ORDER BY c.fecha_cita DESC""")
     citas = cur.fetchall()
     conn.close()
     contenido = """
     <h2>📋 Admisión</h2>
-    <ul class="nav nav-tabs" id="admTab" role="tablist">
-        <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#pacientes">Pacientes</a></li>
-        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#citas">Citas</a></li>
-        <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#registrar">Registrar Paciente</a></li>
-    </ul>
-    <div class="tab-content mt-3">
-        <div class="tab-pane active" id="pacientes">
-            <table class="table"><thead><tr><th>HC</th><th>DNI</th><th>Nombre</th><th>Apellido</th><th>Acciones</th></tr></thead><tbody>{% for p in pacientes %}<tr><td>{{ p[1] }}</td><td>{{ p[2] }}</td><td>{{ p[3] }}</td><td>{{ p[4] }}</td><td><a href="{{ url_for('editar_paciente_admision', id_paciente=p[0]) }}" class="btn btn-warning btn-sm">✏️</a></td></tr>{% else %}<tr><td colspan="5">Sin pacientes</td></tr>{% endfor %}</tbody></table>
-        </div>
-        <div class="tab-pane" id="citas">
-            <button onclick="toggleForm('form_cita')" class="btn btn-success mb-2">+ Nueva Cita</button>
-            <div id="form_cita" style="display:none; margin-top:10px;">
-                <form method="POST" action="{{ url_for('crear_cita') }}">
-                    <div class="row g-2">
-                        <div class="col-md-3"><label>Paciente</label><select name="id_paciente" class="form-control" required>{% for p in pacientes %}<option value="{{ p[0] }}">{{ p[1] }} - {{ p[2] }} {{ p[3] }}</option>{% endfor %}</select></div>
-                        <div class="col-md-3"><label>Servicio</label><select name="id_servicio" class="form-control" required>{% for s in servicios %}<option value="{{ s[0] }}">{{ s[1] }}</option>{% endfor %}</select></div>
-                        <div class="col-md-3"><label>Médico</label><select name="id_medico" class="form-control" required>{% for m in medicos %}<option value="{{ m[0] }}">{{ m[1] }}</option>{% endfor %}</select></div>
-                        <div class="col-md-2"><label>Fecha</label><input type="date" name="fecha_cita" class="form-control" required></div>
-                        <div class="col-md-1"><label>Hora</label><input type="time" name="hora_cita" step="60" class="form-control" required></div>
-                        <div class="col-md-3"><label>Tipo</label><select name="tipo_asegurado" class="form-control" required><option value="Demanda">Demanda</option><option value="SIS">SIS</option><option value="SOAT">SOAT</option></select></div>
-                        <div class="col-md-9"><label>Motivo</label><textarea name="motivo_consulta" class="form-control" rows="1"></textarea></div>
-                        <div class="col-md-12"><button class="btn btn-primary">Agendar</button></div>
-                    </div>
-                </form>
-            </div>
-            <table class="table"><thead><tr><th>HC</th><th>Paciente</th><th>Servicio</th><th>Fecha</th><th>Tipo</th><th>Orden</th><th>Boleta</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>{% for c in citas %}<tr><td>{{ c[1] }}</td><td>{{ c[2] }} {{ c[3] }}</td><td>{{ c[4] }}</td><td>{{ c[5] }}</td><td>{{ c[7] }}</td><td>{{ c[9] or 'N/A' }}</td><td>{{ c[8] or 'Pendiente' }}</td><td><span class="badge badge-{{ 'pagado' if c[6]=='Pagado' else 'pendiente' }}">{{ c[6] }}</span></td><td><a href="{{ url_for('imprimir_ficha_admision', id_cita=c[0]) }}" class="btn btn-primary btn-sm">📄</a></td></tr>{% else %}<tr><td colspan="9">Sin citas</td></tr>{% endfor %}</tbody></table>
-        </div>
-        <div class="tab-pane" id="registrar">
+    <div class="card p-3 mb-3">
+        <div class="d-flex gap-2 flex-wrap"><button onclick="toggleForm('form_cita')" class="btn btn-success">+ Nueva Cita</button><button onclick="toggleForm('form_paciente')" class="btn btn-primary">+ Registrar Paciente</button></div>
+        <div id="form_paciente" style="display:none; margin-top:15px; border-top:1px solid #ddd; padding-top:15px;">
+            <h4>Registrar Paciente</h4>
             <form method="POST"><input type="hidden" name="accion" value="registrar_paciente">
-                <div class="row g-2">
-                    <div class="col-md-3"><label>DNI *</label><input type="text" name="dni" class="form-control" required></div>
-                    <div class="col-md-3"><label>Nombre *</label><input type="text" name="nombre" class="form-control" required></div>
-                    <div class="col-md-3"><label>Apellido *</label><input type="text" name="apellido" class="form-control" required></div>
-                    <div class="col-md-3"><label>Fecha Nac.</label><input type="date" name="fecha_nacimiento" class="form-control"></div>
-                    <div class="col-md-3"><label>Sexo</label><select name="sexo" class="form-control"><option value="">Seleccione</option><option value="Masculino">Masculino</option><option value="Femenino">Femenino</option><option value="Otro">Otro</option></select></div>
-                    <div class="col-md-3"><label>Nº Afiliación</label><input type="text" name="nro_afiliacion" class="form-control"></div>
-                    <div class="col-md-3"><label>Teléfono</label><input type="text" name="telefono" class="form-control"></div>
-                    <div class="col-md-3"><label>Celular</label><input type="text" name="celular" class="form-control"></div>
-                    <div class="col-md-12"><label>Dirección</label><input type="text" name="direccion" class="form-control"></div>
-                    <div class="col-md-12"><button class="btn btn-success">Guardar</button></div>
+                <div class="adm-form-grid">
+                    <div><label>DNI *</label><input type="text" name="dni" class="form-control" required></div>
+                    <div><label>Nombre *</label><input type="text" name="nombre" class="form-control" required></div>
+                    <div><label>Apellido *</label><input type="text" name="apellido" class="form-control" required></div>
+                    <div><label>Fecha Nac.</label><input type="date" name="fecha_nacimiento" class="form-control" id="fnac" onchange="calcularEdad()"></div>
+                    <div><label>Edad</label><input type="number" name="edad" id="edad" class="form-control" readonly></div>
+                    <div><label>Sexo</label><select name="sexo" class="form-control"><option value="">Seleccione</option><option value="Masculino">Masculino</option><option value="Femenino">Femenino</option><option value="Otro">Otro</option></select></div>
+                    <div><label>Nº Afiliación</label><input type="text" name="nro_afiliacion" class="form-control"></div>
+                    <div><label>Historia Clínica</label><input type="text" name="historia_clinica" class="form-control" placeholder="Opcional - dejar vacío para auto-generar"></div>
+                    <div><label>Teléfono</label><input type="text" name="telefono" class="form-control"></div>
+                    <div><label>Celular</label><input type="text" name="celular" class="form-control"></div>
+                    <div style="grid-column:span 2;"><label>Dirección</label><input type="text" name="direccion" class="form-control"></div>
                 </div>
+                <button class="btn btn-success mt-2">Guardar</button>
+            </form>
+        </div>
+        <div id="form_cita" style="display:none; margin-top:15px; border-top:1px solid #ddd; padding-top:15px;">
+            <h4>Nueva Cita</h4>
+            <form method="POST" action="{{ url_for('crear_cita') }}" id="formCita">
+                <div class="row g-2">
+                    <div class="col-md-6">
+                        <label>Buscar Paciente</label>
+                        <div style="position:relative;">
+                            <input type="text" id="buscar_paciente" class="form-control" placeholder="Escriba DNI, nombre, apellido o HC..." autocomplete="off">
+                            <div id="sugerencias_pacientes" class="autocomplete-suggestions" style="display:none; position:absolute; background:white; border:1px solid #ccc; max-height:200px; overflow-y:auto; width:100%; z-index:1000;"></div>
+                        </div>
+                        <input type="hidden" name="id_paciente" id="id_paciente" required>
+                        <small id="paciente_seleccionado" class="text-muted">Ningún paciente seleccionado</small>
+                    </div>
+                    <div class="col-md-6">
+                        <label>Servicio</label>
+                        <select name="id_servicio" class="form-control" required>
+                            {% for s in servicios %}
+                            <option value="{{ s[0] }}">{{ s[1] }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label>Médico</label>
+                        <select name="id_medico" class="form-control" required>
+                            {% for m in medicos %}
+                            <option value="{{ m[0] }}">{{ m[1] }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label>Fecha</label>
+                        <input type="date" name="fecha_cita" class="form-control" required>
+                    </div>
+                    <div class="col-md-4">
+                        <label>Hora</label>
+                        <input type="time" name="hora_cita" step="60" class="form-control" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label>Tipo</label>
+                        <select name="tipo_asegurado" class="form-control" required>
+                            <option value="Demanda">Demanda</option>
+                            <option value="SIS">SIS</option>
+                            <option value="SOAT">SOAT</option>
+                        </select>
+                    </div>
+                    <div class="col-md-12">
+                        <label>Motivo</label>
+                        <textarea name="motivo_consulta" class="form-control" rows="2"></textarea>
+                    </div>
+                </div>
+                <button class="btn btn-primary mt-2">Agendar</button>
             </form>
         </div>
     </div>
-    <script>function toggleForm(id){var x=document.getElementById(id);x.style.display=x.style.display==='none'?'block':'none'}</script>
+    <h3>Pacientes</h3>
+    <table class="table"><thead><tr><th>HC</th><th>DNI</th><th>Nombre</th><th>Apellido</th><th>Acciones</th></tr></thead><tbody>{% for p in pacientes %}<tr><td>{{ p[1] }}</td><td>{{ p[2] }}</td><td>{{ p[3] }}</td><td>{{ p[4] }}</td><td><a href="{{ url_for('editar_paciente_admision', id_paciente=p[0]) }}" class="btn btn-warning btn-sm">✏️</a></td></tr>{% else %}<tr><td colspan="5">Sin pacientes</td></tr>{% endfor %}</tbody></table>
+    <h3>Citas</h3>
+    <table class="table"><thead><tr><th>HC</th><th>Paciente</th><th>Servicio</th><th>Fecha</th><th>Tipo</th><th>Boleta</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>{% for c in citas %}<tr><td>{{ c[1] }}</td><td>{{ c[2] }} {{ c[3] }}</td><td>{{ c[4] }}</td><td>{{ c[5] }}</td><td>{{ c[7] }}</td><td>{{ c[8] or 'Pendiente' }}</td><td><span class="badge badge-{{ 'pagado' if c[6]=='Pagado' else 'pendiente' }}">{{ c[6] }}</span></td><td><a href="{{ url_for('imprimir_ficha_admision', id_cita=c[0]) }}" class="btn btn-primary btn-sm">📄</a></td></tr>{% else %}<tr><td colspan="8">Sin citas</td></tr>{% endfor %}</tbody></table>
+    <script>
+        function toggleForm(id){var x=document.getElementById(id);x.style.display=x.style.display==='none'?'block':'none';}
+        function calcularEdad(){var fn=document.getElementById('fnac').value;if(fn){var hoy=new Date();var nac=new Date(fn);var edad=hoy.getFullYear()-nac.getFullYear();var m=hoy.getMonth()-nac.getMonth();if(m<0||(m===0&&hoy.getDate()<nac.getDate()))edad--;document.getElementById('edad').value=edad;}else{document.getElementById('edad').value='';}}
+        // Búsqueda de pacientes para nueva cita
+        const inputBuscarPaciente = document.getElementById('buscar_paciente');
+        const sugerenciasDiv = document.getElementById('sugerencias_pacientes');
+        const idPacienteHidden = document.getElementById('id_paciente');
+        const pacienteSeleccionado = document.getElementById('paciente_seleccionado');
+        let timeoutBusqueda = null;
+        if (inputBuscarPaciente) {
+            inputBuscarPaciente.addEventListener('input', function() {
+                const q = this.value.trim();
+                if (q.length < 2) { sugerenciasDiv.style.display = 'none'; return; }
+                clearTimeout(timeoutBusqueda);
+                timeoutBusqueda = setTimeout(() => {
+                    fetch('/api/buscar_pacientes?q=' + encodeURIComponent(q))
+                        .then(r => r.json())
+                        .then(data => {
+                            sugerenciasDiv.innerHTML = '';
+                            if (data.length === 0) {
+                                sugerenciasDiv.innerHTML = '<div class="p-2 text-muted">No se encontraron pacientes</div>';
+                            } else {
+                                data.forEach(p => {
+                                    const div = document.createElement('div');
+                                    div.className = 'p-2 hover-bg-light';
+                                    div.style.cursor = 'pointer';
+                                    div.textContent = `${p.historia_clinica || 'S/HC'} - ${p.dni} - ${p.nombre} ${p.apellido}`;
+                                    div.addEventListener('click', function() {
+                                        inputBuscarPaciente.value = `${p.historia_clinica || 'S/HC'} - ${p.dni} - ${p.nombre} ${p.apellido}`;
+                                        idPacienteHidden.value = p.id;
+                                        pacienteSeleccionado.textContent = `Paciente seleccionado: ${p.nombre} ${p.apellido} (${p.dni})`;
+                                        pacienteSeleccionado.className = 'text-success';
+                                        sugerenciasDiv.style.display = 'none';
+                                    });
+                                    sugerenciasDiv.appendChild(div);
+                                });
+                            }
+                            sugerenciasDiv.style.display = 'block';
+                        });
+                }, 300);
+            });
+            document.addEventListener('click', function(e) {
+                if (!e.target.closest('#buscar_paciente') && !e.target.closest('#sugerencias_pacientes')) {
+                    sugerenciasDiv.style.display = 'none';
+                }
+            });
+            document.getElementById('formCita').addEventListener('submit', function(e) {
+                if (!idPacienteHidden.value) {
+                    e.preventDefault();
+                    alert('Debe seleccionar un paciente de la lista de búsqueda.');
+                    inputBuscarPaciente.focus();
+                }
+            });
+        }
+    </script>
     """
     config = obtener_configuracion()
     nombre_sistema = config[0] if config else 'SISGALENO2026'
-    system_bg = config[12] if config and len(config) > 12 else ''
-    login_bg = config[11] if config and len(config) > 11 else ''
     base = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido)
     return render_template_string(base, nombre_sistema=nombre_sistema, user_modules=get_user_modules(session.get('rol')),
-                                  pacientes=pacientes, servicios=servicios, medicos=medicos, citas=citas,
-                                  system_background=system_bg, login_background=login_bg)
+                                  pacientes=pacientes, servicios=servicios, medicos=medicos, citas=citas)
 
 @app.route('/admision/crear_cita', methods=['POST'])
-@login_required
 def crear_cita():
     if 'Admisión' not in get_user_modules(session.get('rol')):
         return redirect(url_for('dashboard'))
-    id_pac = request.form['id_paciente']; id_serv = request.form['id_servicio']
-    id_med = request.form['id_medico']; fecha_str = request.form['fecha_cita']
-    hora_str = request.form['hora_cita']; motivo = request.form.get('motivo_consulta', '')
+    id_pac = request.form['id_paciente']
+    id_serv = request.form['id_servicio']
+    id_med = request.form['id_medico']
+    fecha_str = request.form['fecha_cita']
+    hora_str = request.form['hora_cita']
+    motivo = request.form.get('motivo_consulta', '')
     tipo = request.form['tipo_asegurado']
     fecha_hora = f"{fecha_str} {hora_str}:00"
-    conn = get_db_connection(); cur = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     estado = 'Pagado' if tipo in ['SIS','SOAT'] else 'Pendiente'
-    numero_orden = generar_numero_orden()
-    cur.execute("INSERT INTO citas (id_paciente, id_servicio, id_medico, fecha_cita, estado, motivo_consulta, tipo_asegurado, numero_boleta, numero_orden) VALUES (?,?,?,?,?,?,?,?,?)",
-                (id_pac, id_serv, id_med, fecha_hora, estado, motivo, tipo, '', numero_orden))
-    conn.commit(); conn.close()
+    ejecutar_consulta(cur, "INSERT INTO citas (id_paciente, id_servicio, id_medico, fecha_cita, estado, motivo_consulta, tipo_asegurado, numero_boleta) VALUES (?,?,?,?,?,?,?,?)",
+                (id_pac, id_serv, id_med, fecha_hora, estado, motivo, tipo, ''))
+    conn.commit()
+    conn.close()
     return redirect(url_for('admision'))
 
 @app.route('/admision/imprimir/<int:id_cita>')
-@login_required
 def imprimir_ficha_admision(id_cita):
     if 'Admisión' not in get_user_modules(session.get('rol')):
         return redirect(url_for('dashboard'))
-    conn = get_db_connection(); cur = conn.cursor()
-    cur.execute("""SELECT p.nombre, p.apellido, p.dni, p.edad, p.sexo, p.historia_clinica, s.nombre, m.nombre||' '||m.apellido, c.fecha_cita, c.tipo_asegurado, c.numero_boleta
+    conn = get_db_connection()
+    cur = conn.cursor()
+    ejecutar_consulta(cur, """SELECT p.nombre, p.apellido, p.dni, p.edad, p.sexo, p.historia_clinica, s.nombre, m.nombre||' '||m.apellido, c.fecha_cita, c.tipo_asegurado, c.numero_boleta
                    FROM citas c JOIN pacientes p ON c.id_paciente=p.id JOIN servicios s ON c.id_servicio=s.id JOIN medicos m ON c.id_medico=m.id WHERE c.id=?""", (id_cita,))
-    data = cur.fetchone(); conn.close()
+    data = cur.fetchone()
+    conn.close()
     if not data: return "Cita no encontrada", 404
-    # Usar plantilla HTML para la ficha
     config = obtener_configuracion()
     nombre_sistema = config[0] if config else 'SISGALENO2026'
     logo_path = config[2] if config else ''
-    plantilla = """
-    <!DOCTYPE html>
-    <html>
-    <head><meta charset="UTF-8"><title>Ficha de Admisión</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 20mm; }
-        .header { text-align: center; border-bottom: 2px solid #0d2b45; padding-bottom: 10px; }
-        .logo { max-height: 80px; }
-        .info { margin: 20px 0; }
-        .info td { padding: 5px 10px; }
-        .footer { margin-top: 40px; text-align: center; font-size: 12px; color: #666; }
-        @page { margin: 15mm; }
-    </style>
-    </head>
-    <body>
-        <div class="header">
-            {% if logo_path %}<img class="logo" src="{{ logo_path }}" alt="Logo">{% endif %}
-            <h2>{{ nombre_sistema }}</h2>
-            <h3>FICHA DE ADMISIÓN</h3>
-        </div>
-        <table class="info">
-            <tr><td><strong>Paciente:</strong></td><td>{{ data[0] }} {{ data[1] }}</td></tr>
-            <tr><td><strong>DNI:</strong></td><td>{{ data[2] }}</td></tr>
-            <tr><td><strong>HC:</strong></td><td>{{ data[5] }}</td></tr>
-            <tr><td><strong>Servicio:</strong></td><td>{{ data[6] }}</td></tr>
-            <tr><td><strong>Médico:</strong></td><td>Dr. {{ data[7] }}</td></tr>
-            <tr><td><strong>Fecha:</strong></td><td>{{ data[8] }}</td></tr>
-            <tr><td><strong>Tipo:</strong></td><td>{{ data[9] }}</td></tr>
-        </table>
-        <div class="footer">{{ config[4] if config else '' }}</div>
-    </body>
-    </html>
-    """
-    from jinja2 import Template
-    html = Template(plantilla).render(data=data, logo_path=url_for('static', filename=logo_path) if logo_path else '', nombre_sistema=nombre_sistema, config=config)
-    pdf = generar_pdf_desde_html(html, {}, 'A4')
-    return send_file(pdf, as_attachment=True, download_name=f"Ficha_Admision_{id_cita}.pdf", mimetype='application/pdf')
+    encabezado = config[3] if config else 'Laboratorio Clínico'
+    pie = config[4] if config else ''
+    size = obtener_tamano_pagina('report')
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=size, topMargin=30, bottomMargin=30)
+    styles = getSampleStyleSheet()
+    elems = []
+    if logo_path and os.path.exists(os.path.join('static', logo_path)):
+        try:
+            img = ImageReader(os.path.join('static', logo_path))
+            elems.append(Spacer(1,10))
+        except: pass
+    title = ParagraphStyle(name='Title', parent=styles['Heading1'], fontSize=16, alignment=1, spaceAfter=20)
+    elems.append(Paragraph(f"<b>{nombre_sistema}</b>", title))
+    elems.append(Paragraph(f"<i>{encabezado}</i>", styles['Heading2']))
+    elems.append(Paragraph("<b>FICHA DE ADMISIÓN</b>", styles['Heading2']))
+    elems.append(Spacer(1,15))
+    info = f"""<b>Paciente:</b> {data[0]} {data[1]}<br/><b>DNI:</b> {data[2]}<br/><b>HC:</b> {data[5]}<br/><b>Servicio:</b> {data[6]}<br/><b>Médico:</b> Dr. {data[7]}<br/><b>Fecha:</b> {data[8]}<br/><b>Tipo:</b> {data[9]}"""
+    elems.append(Paragraph(info, styles['Normal']))
+    elems.append(Spacer(1,15))
+    elems.append(Paragraph("<b>Motivo:</b>", styles['Normal']))
+    elems.append(Paragraph("No especificado" if not data[10] else data[10], styles['Normal']))
+    elems.append(Spacer(1,30))
+    elems.append(Paragraph(pie, styles['Italic']))
+    doc.build(elems)
+    buf.seek(0)
+    return send_file(buf, as_attachment=True, download_name=f"Ficha_Admision_{id_cita}.pdf", mimetype='application/pdf')
 
 @app.route('/admision/editar_paciente/<int:id_paciente>', methods=['GET','POST'])
-@login_required
 def editar_paciente_admision(id_paciente):
     if 'Admisión' not in get_user_modules(session.get('rol')):
         return redirect(url_for('dashboard'))
-    conn = get_db_connection(); cur = conn.cursor()
+    conn = get_db_connection()
+    cur = conn.cursor()
     if request.method == 'POST':
-        nombre = request.form['nombre']; apellido = request.form['apellido']
-        dni = request.form['dni']; fecha_nac = request.form.get('fecha_nacimiento', '')
-        telefono = request.form.get('telefono', ''); celular = request.form.get('celular', '')
-        direccion = request.form.get('direccion', ''); sexo = request.form.get('sexo', '')
+        nombre = request.form['nombre']
+        apellido = request.form['apellido']
+        dni = request.form['dni']
+        fecha_nac = request.form.get('fecha_nacimiento', '')
+        telefono = request.form.get('telefono', '')
+        celular = request.form.get('celular', '')
+        direccion = request.form.get('direccion', '')
+        sexo = request.form.get('sexo', '')
         nro_af = request.form.get('nro_afiliacion', '')
         edad = calcular_edad(fecha_nac) if fecha_nac else 0
-        cur.execute("""UPDATE pacientes SET nombre=?, apellido=?, dni=?, fecha_nacimiento=?, telefono=?, celular=?, direccion=?, sexo=?, edad=?, nro_afiliacion=? WHERE id=?""",
+        ejecutar_consulta(cur, """UPDATE pacientes SET nombre=?, apellido=?, dni=?, fecha_nacimiento=?, telefono=?, celular=?, direccion=?, sexo=?, edad=?, nro_afiliacion=? WHERE id=?""",
                     (nombre, apellido, dni, fecha_nac, telefono, celular, direccion, sexo, edad, nro_af, id_paciente))
-        conn.commit(); conn.close()
+        conn.commit()
+        conn.close()
         flash('Paciente actualizado.', 'success')
         return redirect(url_for('admision'))
-    cur.execute("SELECT id, nombre, apellido, dni, fecha_nacimiento, telefono, celular, direccion, sexo, nro_afiliacion FROM pacientes WHERE id=?", (id_paciente,))
-    p = cur.fetchone(); conn.close()
+    ejecutar_consulta(cur, "SELECT id, nombre, apellido, dni, fecha_nacimiento, telefono, celular, direccion, sexo, nro_afiliacion FROM pacientes WHERE id=?", (id_paciente,))
+    p = cur.fetchone()
+    conn.close()
     if not p: return "Paciente no encontrado", 404
     contenido = f"""
     <h2>✏️ Editar Paciente - {p[1]} {p[2]}</h2>
@@ -916,11 +1010,8 @@ def editar_paciente_admision(id_paciente):
     """
     config = obtener_configuracion()
     nombre_sistema = config[0] if config else 'SISGALENO2026'
-    system_bg = config[12] if config and len(config) > 12 else ''
-    login_bg = config[11] if config and len(config) > 11 else ''
     base = LAYOUT_BASE.replace('<!-- CONTENIDO_DINAMICO -->', contenido)
-    return render_template_string(base, nombre_sistema=nombre_sistema, user_modules=get_user_modules(session.get('rol')),
-                                  system_background=system_bg, login_background=login_bg)
+    return render_template_string(base, nombre_sistema=nombre_sistema, user_modules=get_user_modules(session.get('rol')))
 
 # ========================== MÓDULO CAJA ==========================
 @app.route('/caja', methods=['GET','POST'])
