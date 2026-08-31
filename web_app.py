@@ -85,7 +85,6 @@ def get_db_connection():
         return conn
     else:
         return sqlite3.connect('sisgaleno2026.db')
-
 # ========================== PLANTILLA DEFAULT ==========================
 PLANTILLA_DEFAULT_RESULTADO = """
 <!DOCTYPE html>
