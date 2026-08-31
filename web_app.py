@@ -62,7 +62,27 @@ MEDIA_CARTA = (216 * 28.35 / 2, 279 * 28.35 / 2)
 
 def get_db_connection():
     if IS_POSTGRES:
-        return psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(DATABASE_URL)
+        
+        # === PARCHE PARA COMPATIBILIDAD (CONVIERTE ? A %s) ===
+        original_cursor = conn.cursor
+        def patched_cursor(*args, **kwargs):
+            cursor = original_cursor(*args, **kwargs)
+            original_execute = cursor.execute
+            
+            def execute_with_psycopg(sql, params=None):
+                # Reemplazamos ? por %s automáticamente
+                if '?' in sql:
+                    sql = sql.replace('?', '%s')
+                if params is None:
+                    return original_execute(sql)
+                return original_execute(sql, params)
+            
+            cursor.execute = execute_with_psycopg
+            return cursor
+        
+        conn.cursor = patched_cursor
+        return conn
     else:
         return sqlite3.connect('sisgaleno2026.db')
 
