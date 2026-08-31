@@ -96,7 +96,7 @@ PLANTILLA_DEFAULT_RESULTADO = """
 </head>
 <body>
     <div class="header">
-        <img class="logo" src="{{ logo_url }}" alt="Logo">
+        <img class="logo" src="{{ config[2] }}" alt="Logo">
         <h2>{{ nombre_sistema }}</h2>
         <h3>INFORME DE RESULTADOS</h3>
     </div>
@@ -123,7 +123,7 @@ PLANTILLA_DEFAULT_RESULTADO = """
         <p>Generado por {{ nombre_sistema }}</p>
     </div>
     {% if sello_url %}
-    <img class="sello" src="{{ sello_url }}" alt="Sello">
+    <img class="sello" src="{{ config[7] }}" alt="Sello">
     {% endif %}
 </body>
 </html>
@@ -436,7 +436,7 @@ LAYOUT_BASE = """
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #f4f7f6;
-            {% if system_background %} background-image: url('/static/{{ system_background }}'); background-size: cover; background-attachment: fixed; background-position: center; {% endif %}
+            {% if system_background %} background-image: url('{{ system_background }}'); background-size: cover; background-attachment: fixed; background-position: center; {% endif %}
         }
         .navbar-custom { background: linear-gradient(90deg, #0d2b45 0%, #1a4d70 100%); }
         .navbar-custom .navbar-brand, .navbar-custom .nav-link { color: white; }
@@ -476,7 +476,7 @@ LAYOUT_BASE = """
         .modal-fullscreen .modal-body { overflow-y: auto; text-align: center; }
         .modal-fullscreen .modal-body img { max-width: 100%; max-height: 85vh; object-fit: contain; }
         .fondo-login {
-            {% if login_background %} background-image: url('/static/{{ login_background }}'); background-size: cover; background-position: center;
+            {% if login_background %} background-image: url('{{ login_background }}'); background-size: cover; background-position: center;
             {% else %} background: linear-gradient(135deg, #0d2b45 0%, #1a4d70 100%); {% endif %}
             min-height: 100vh; display: flex; align-items: center; justify-content: center;
         }
