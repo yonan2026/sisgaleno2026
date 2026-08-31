@@ -2619,6 +2619,8 @@ def api_examenes():
     return jsonify([{'id':r[0], 'codigo':r[1], 'descripcion':r[2], 'precio':r[3]} for r in res])
 
 # ========================== INICIO ==========================
+# ========================== INICIO ==========================
+
 def init_db():
     """Inicializa la base de datos creando tablas y migrando columnas faltantes."""
     conn = get_db_connection()
@@ -2635,6 +2637,14 @@ def init_db():
             if 'system_background' not in existing_columns:
                 cur.execute("ALTER TABLE configuracion_sistema ADD COLUMN system_background TEXT")
                 print("Columna system_background agregada.")
+            
+            # Crear usuario admin por defecto si no existe
+            cur.execute("SELECT * FROM usuarios WHERE usuario = %s", ('admin',))
+            if not cur.fetchone():
+                cur.execute("INSERT INTO usuarios (usuario, rol, password_hash) VALUES (%s, %s, %s)", 
+                            ('admin', 'Administrador', generate_password_hash('admin123')))
+                print("Usuario admin creado automáticamente.")
+                
             conn.commit()
         else:
             # Lógica para SQLite (leer tu schema.sql)
@@ -2648,3 +2658,13 @@ def init_db():
         print(f"Error al inicializar la base de datos: {e}")
     finally:
         conn.close()
+
+# ¡¡¡CLAVE PARA RENDER!!! 
+# Gunicorn no ejecuta el bloque __main__, por lo que llamamos a init_db() aquí.
+# Esto se ejecuta automáticamente cada vez que Render importa 'web_app'.
+with app.app_context():
+    init_db()
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port, debug=True)
