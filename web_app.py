@@ -59,9 +59,19 @@ IS_POSTGRES = DATABASE_URL is not None and DATABASE_URL.startswith('postgresql')
 TICKET_80MM = (80 * 28.35, 297 * 28.35)
 TICKET_80MM_LANDSCAPE = (297 * 28.35, 80 * 28.35)
 MEDIA_CARTA = (216 * 28.35 / 2, 279 * 28.35 / 2)
+import psycopg2.extensions as _ext
+
+class CustomCursor(_ext.cursor):
+    def execute(self, query, vars=None):
+        # Convierte automáticamente los ? de SQLite a %s para PostgreSQL
+        if '?' in query:
+            query = query.replace('?', '%s')
+        return super().execute(query, vars)
+
 def get_db_connection():
     if IS_POSTGRES:
-        return psycopg2.connect(DATABASE_URL)
+        # Usamos este cursor personalizado para que funcione todo sin editar cada consulta
+        return psycopg2.connect(DATABASE_URL, cursor_factory=CustomCursor)
     else:
         return sqlite3.connect('sisgaleno2026.db')
 # ... (tu código siguiente)
