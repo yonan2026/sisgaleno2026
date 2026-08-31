@@ -123,11 +123,13 @@ PLANTILLA_DEFAULT_RESULTADO = """
 def obtener_configuracion():
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT nombre_sistema, tamano_hoja, logo_path, encabezado_texto, pie_pagina_texto, report_header, report_footer, sello_path, ticket_size, report_size, result_size, login_background, system_background FROM configuracion_sistema WHERE id=1")
+    if IS_POSTGRES:
+        cur.execute("SELECT nombre_sistema, tamano_hoja, logo_path, encabezado_texto, pie_pagina_texto, report_header, report_footer, sello_path, ticket_size, report_size, result_size, login_background, system_background FROM configuracion_sistema WHERE id=%s", (1,))
+    else:
+        cur.execute("SELECT nombre_sistema, tamano_hoja, logo_path, encabezado_texto, pie_pagina_texto, report_header, report_footer, sello_path, ticket_size, report_size, result_size, login_background, system_background FROM configuracion_sistema WHERE id=?", (1,))
     row = cur.fetchone()
     conn.close()
     return row
-
 def obtener_tamano_pagina(tipo='default'):
     """Retorna el tamaño de página según la configuración y el tipo de documento."""
     conn = get_db_connection()
@@ -2618,7 +2620,6 @@ def api_examenes():
     return jsonify([{'id':r[0], 'codigo':r[1], 'descripcion':r[2], 'precio':r[3]} for r in res])
 
 # ========================== INICIO ==========================
-# ========================== INICIO ==========================
 
 def init_db():
     """Inicializa la base de datos creando tablas y migrando columnas faltantes."""
@@ -2637,7 +2638,7 @@ def init_db():
                 cur.execute("ALTER TABLE configuracion_sistema ADD COLUMN system_background TEXT")
                 print("Columna system_background agregada.")
             
-            # Crear usuario admin por defecto si no existe
+                        # Crear usuario admin por defecto si no existe
             cur.execute("SELECT * FROM usuarios WHERE usuario = %s", ('admin',))
             if not cur.fetchone():
                 cur.execute("INSERT INTO usuarios (usuario, rol, password_hash) VALUES (%s, %s, %s)", 
@@ -2646,7 +2647,7 @@ def init_db():
                 
             conn.commit()
         else:
-            # Lógica para SQLite (leer tu schema.sql)
+            # Lógica para SQLite (leer schema.sql)
             schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
             with open(schema_path, 'r', encoding='utf-8') as f:
                 conn.executescript(f.read())
@@ -2658,12 +2659,11 @@ def init_db():
     finally:
         conn.close()
 
-# ¡¡¡CLAVE PARA RENDER!!! 
-# Gunicorn no ejecuta el bloque __main__, por lo que llamamos a init_db() aquí.
-# Esto se ejecuta automáticamente cada vez que Render importa 'web_app'.
+# ========================== INICIO DE LA APP ==========================
+
+# Ejecuta la migración automáticamente al importar la app (Clave para Render)
 with app.app_context():
     init_db()
-
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port, debug=True)
