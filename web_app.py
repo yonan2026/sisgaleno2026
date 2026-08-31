@@ -2592,7 +2592,7 @@ def subir_fondo_login():
 @app.route('/configuracion/subir_fondo_sistema', methods=['GET','POST'])
 @login_required
 def subir_fondo_sistema():
-     if request.method == 'POST':
+         if request.method == 'POST':
         file = request.files.get('fondo_archivo')
         if file and file.filename:
             import base64
