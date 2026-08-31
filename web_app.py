@@ -2620,32 +2620,43 @@ def api_examenes():
 
 # ========================== INICIO ==========================
 def init_db():
-    """Inicializa la base de datos creando las tablas desde schema.sql"""
+    """Inicializa la base de datos creando las tablas desde schema.sql y agregando columnas faltantes."""
     conn = get_db_connection()
     try:
-        # Usar ruta absoluta para asegurar que encuentre el archivo
+        # 1. Ejecutar schema.sql para crear tablas que no existan
         schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
         with open(schema_path, 'r', encoding='utf-8') as f:
-            # ¡OJO! executescript es de la CONEXIÓN (conn), no del cursor (cur)
-            conn.executescript(f.read())
-        conn.commit()
-        print("Base de datos inicializada correctamente.")
+            sql = f.read()
+            # Para PostgreSQL, el executescript no funciona así, hay que ejecutar sentencias por separado
+            if IS_POSTGRES:
+                # PostgreSQL no soporta executescript, pero psycopg2 puede ejecutar múltiples con cursor.execute
+                # (Asumiendo que no hay caracteres especiales, aunque es mejor usar ';' para separar)
+                # Usamos una conexión autocommit para crear tablas
+                conn.autocommit = True
+                cur = conn.cursor()
+                cur.execute(sql)
+            else:
+                conn.executescript(sql)
+                conn.commit()
+
+        # 2. Migración: Agregar columnas faltantes en PostgreSQL
+        if IS_POSTGRES:
+            cur = conn.cursor()
+            # Verificar si la columna login_background existe
+            cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='configuracion_sistema' AND column_name='login_background'")
+            if not cur.fetchone():
+                cur.execute("ALTER TABLE configuracion_sistema ADD COLUMN login_background TEXT")
+                print("Columna login_background agregada a configuracion_sistema")
+            
+            cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='configuracion_sistema' AND column_name='system_background'")
+            if not cur.fetchone():
+                cur.execute("ALTER TABLE configuracion_sistema ADD COLUMN system_background TEXT")
+                print("Columna system_background agregada a configuracion_sistema")
+            
+            conn.commit()
+
+        print("Base de datos inicializada/migrada correctamente.")
     except Exception as e:
         print(f"Error al inicializar la base de datos: {e}")
     finally:
         conn.close()
-
-# Comando CLI
-import click
-@app.cli.command('init-db')
-def init_db_command():
-    """Inicializa la base de datos."""
-    init_db()
-    click.echo('Base de datos inicializada.')
-
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
-    # Auto-inicializa la base de datos al ejecutar el script
-    with app.app_context():
-        init_db()
-    app.run(host='0.0.0.0', port=port, debug=True)
