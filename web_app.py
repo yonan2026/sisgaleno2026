@@ -2620,41 +2620,29 @@ def api_examenes():
 
 # ========================== INICIO ==========================
 def init_db():
-    """Inicializa la base de datos creando las tablas desde schema.sql y agregando columnas faltantes."""
+    """Inicializa la base de datos creando tablas y migrando columnas faltantes."""
     conn = get_db_connection()
     try:
-        # 1. Ejecutar schema.sql para crear tablas que no existan
-        schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
-        with open(schema_path, 'r', encoding='utf-8') as f:
-            sql = f.read()
-            # Para PostgreSQL, el executescript no funciona así, hay que ejecutar sentencias por separado
-            if IS_POSTGRES:
-                # PostgreSQL no soporta executescript, pero psycopg2 puede ejecutar múltiples con cursor.execute
-                # (Asumiendo que no hay caracteres especiales, aunque es mejor usar ';' para separar)
-                # Usamos una conexión autocommit para crear tablas
-                conn.autocommit = True
-                cur = conn.cursor()
-                cur.execute(sql)
-            else:
-                conn.executescript(sql)
-                conn.commit()
-
-        # 2. Migración: Agregar columnas faltantes en PostgreSQL
+        cur = conn.cursor()
         if IS_POSTGRES:
-            cur = conn.cursor()
-            # Verificar si la columna login_background existe
-            cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='configuracion_sistema' AND column_name='login_background'")
-            if not cur.fetchone():
+            # Verificar y agregar columnas faltantes en PostgreSQL
+            cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='configuracion_sistema'")
+            existing_columns = {row[0] for row in cur.fetchall()}
+            
+            if 'login_background' not in existing_columns:
                 cur.execute("ALTER TABLE configuracion_sistema ADD COLUMN login_background TEXT")
-                print("Columna login_background agregada a configuracion_sistema")
-            
-            cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='configuracion_sistema' AND column_name='system_background'")
-            if not cur.fetchone():
+                print("Columna login_background agregada.")
+            if 'system_background' not in existing_columns:
                 cur.execute("ALTER TABLE configuracion_sistema ADD COLUMN system_background TEXT")
-                print("Columna system_background agregada a configuracion_sistema")
-            
+                print("Columna system_background agregada.")
             conn.commit()
-
+        else:
+            # Lógica para SQLite (leer tu schema.sql)
+            schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
+            with open(schema_path, 'r', encoding='utf-8') as f:
+                conn.executescript(f.read())
+            conn.commit()
+            
         print("Base de datos inicializada/migrada correctamente.")
     except Exception as e:
         print(f"Error al inicializar la base de datos: {e}")
