@@ -2668,7 +2668,7 @@ def init_db():
         print(f"Error al inicializar la base de datos: {e}")
     finally:
         conn.close()
-INICIO DE LA APP ==========================
+# ========================== INICIO DE LA APP ==========================
 
 # Ejecuta la migración automáticamente al importar la app (Clave para Render)
 with app.app_context():
