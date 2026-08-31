@@ -2499,7 +2499,9 @@ def configuracion_sistema():
 @app.route('/configuracion/subir_logo', methods=['GET','POST'])
 @login_required
 def subir_logo():
-     if request.method == 'POST':
+     def subir_logo():
+    if 'Configuración' not in get_user_modules(session.get('rol')): return redirect(url_for('dashboard'))
+    if request.method == 'POST':
         file = request.files.get('logo_archivo')
         if file and file.filename:
             import base64
@@ -2509,6 +2511,7 @@ def subir_logo():
                 base64_str = base64.b64encode(file_data).decode('utf-8')
                 mime_type = file.mimetype or 'image/jpeg'
                 data_uri = f"data:{mime_type};base64,{base64_str}"
+                
                 conn = get_db_connection(); cur = conn.cursor()
                 cur.execute("UPDATE configuracion_sistema SET logo_path=? WHERE id=1", (data_uri,))
                 conn.commit(); conn.close()
@@ -2589,12 +2592,13 @@ def subir_fondo_login():
 @app.route('/configuracion/subir_fondo_sistema', methods=['GET','POST'])
 @login_required
 def subir_fondo_sistema():
-        if request.method == 'POST':
+     if request.method == 'POST':
         file = request.files.get('fondo_archivo')
         if file and file.filename:
             import base64
             allowed = {'png','jpg','jpeg','gif'}
             if '.' in file.filename and file.filename.rsplit('.',1)[1].lower() in allowed:
+                # Convertir la imagen a Base64
                 file_data = file.read()
                 base64_str = base64.b64encode(file_data).decode('utf-8')
                 mime_type = file.mimetype or 'image/jpeg'
