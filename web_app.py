@@ -2632,40 +2632,66 @@ def api_examenes():
 # ========================== INICIO ==========================
 
 def init_db():
-    """Inicializa la base de datos creando tablas y migrando columnas faltantes."""
+    """Inicializa la base de datos creando tablas y el usuario admin en PostgreSQL."""
     conn = get_db_connection()
     try:
         cur = conn.cursor()
-        if IS_POSTGRES:
-            # Verificar y agregar columnas faltantes en PostgreSQL
-            cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='configuracion_sistema'")
-            existing_columns = {row[0] for row in cur.fetchall()}
-            
-            if 'login_background' not in existing_columns:
-                cur.execute("ALTER TABLE configuracion_sistema ADD COLUMN login_background TEXT")
-                print("Columna login_background agregada.")
-            if 'system_background' not in existing_columns:
-                cur.execute("ALTER TABLE configuracion_sistema ADD COLUMN system_background TEXT")
-                print("Columna system_background agregada.")
-            
-                        # Crear usuario admin por defecto si no existe
-            cur.execute("SELECT * FROM usuarios WHERE usuario = %s", ('admin',))
-            if not cur.fetchone():
-                cur.execute("INSERT INTO usuarios (usuario, rol, password_hash) VALUES (%s, %s, %s)", 
-                            ('admin', 'Administrador', generate_password_hash('admin123')))
-                print("Usuario admin creado automáticamente.")
-                
-            conn.commit()
-        else:
-            # Lógica para SQLite (leer schema.sql)
-            schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
-            with open(schema_path, 'r', encoding='utf-8') as f:
-                conn.executescript(f.read())
-            conn.commit()
-            
-        print("Base de datos inicializada/migrada correctamente.")
+        
+        # Crear TODAS las tablas necesarias para que los módulos funcionen
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS configuracion_sistema (
+                id SERIAL PRIMARY KEY,
+                nombre_sistema TEXT, tamano_hoja TEXT, logo_path TEXT, encabezado_texto TEXT, pie_pagina_texto TEXT,
+                report_header TEXT, report_footer TEXT, sello_path TEXT, ticket_size TEXT, report_size TEXT, result_size TEXT,
+                login_background TEXT, system_background TEXT
+            );
+            INSERT INTO configuracion_sistema (id, nombre_sistema) VALUES (1, 'SISGALENO2026') ON CONFLICT (id) DO NOTHING;
+
+            CREATE TABLE IF NOT EXISTS config_impresion (
+                id SERIAL PRIMARY KEY,
+                boleta_tamano TEXT, cita_tamano TEXT, resultado_tamano TEXT, informe_tamano TEXT, receta_tamano TEXT, etiqueta_tamano TEXT
+            );
+            INSERT INTO config_impresion (id, boleta_tamano) VALUES (1, 'TICKET_80MM') ON CONFLICT (id) DO NOTHING;
+
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id SERIAL PRIMARY KEY,
+                usuario TEXT UNIQUE NOT NULL, rol TEXT NOT NULL, password_hash TEXT NOT NULL
+            );
+            INSERT INTO usuarios (usuario, rol, password_hash) VALUES ('admin', 'Administrador', %s) ON CONFLICT (usuario) DO NOTHING;
+
+            CREATE TABLE IF NOT EXISTS permisos_roles (
+                id SERIAL PRIMARY KEY, rol TEXT NOT NULL, modulo TEXT NOT NULL
+            );
+            INSERT INTO permisos_roles (rol, modulo) VALUES ('Administrador', 'Admisión'), ('Administrador', 'Caja'), ('Administrador', 'Laboratorio'), ('Administrador', 'Atención Médica'), ('Administrador', 'Enfermería'), ('Administrador', 'Historias Clínicas'), ('Administrador', 'Configuración') ON CONFLICT DO NOTHING;
+
+            CREATE TABLE IF NOT EXISTS pacientes (id SERIAL PRIMARY KEY, historia_clinica TEXT, dni TEXT, nombre TEXT, apellido TEXT, fecha_nacimiento TEXT, telefono TEXT, celular TEXT, direccion TEXT, sexo TEXT, edad INTEGER, nro_afiliacion TEXT, deleted INTEGER DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS servicios (id SERIAL PRIMARY KEY, nombre TEXT, precio_base REAL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS medicos (id SERIAL PRIMARY KEY, nombre TEXT, apellido TEXT, especialidad TEXT, activo INTEGER DEFAULT 1);
+            CREATE TABLE IF NOT EXISTS citas (id SERIAL PRIMARY KEY, id_paciente INTEGER, id_servicio INTEGER, id_medico INTEGER, fecha_cita TEXT, estado TEXT, motivo_consulta TEXT, tipo_asegurado TEXT, numero_boleta TEXT, numero_orden TEXT);
+            CREATE TABLE IF NOT EXISTS pagos (id SERIAL PRIMARY KEY, id_cita INTEGER, id_paciente INTEGER, numero_boleta TEXT, numero_orden TEXT, monto REAL, fecha_pago TEXT, estado TEXT, descripcion TEXT);
+            CREATE TABLE IF NOT EXISTS diagnosticos (id SERIAL PRIMARY KEY, id_cita INTEGER, id_medico INTEGER, diagnostico TEXT, tratamiento TEXT, descanso_medico_dias INTEGER, informe_pdf_path TEXT);
+
+            CREATE TABLE IF NOT EXISTS examenes_catalogo (id SERIAL PRIMARY KEY, codigo TEXT, descripcion TEXT, precio REAL, activo INTEGER DEFAULT 1);
+            CREATE TABLE IF NOT EXISTS examenes_parametros (id SERIAL PRIMARY KEY, id_examen_catalogo INTEGER, nombre_parametro TEXT, unidad TEXT, rango_referencia TEXT, orden INTEGER DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS ordenes_laboratorio (id SERIAL PRIMARY KEY, id_paciente INTEGER, id_cita INTEGER, id_examen INTEGER, examen_manual TEXT, servicio_manual TEXT, fecha_emision TEXT, fecha_validez TEXT, estado TEXT, precio_total REAL, numero_orden TEXT, numero_boleta TEXT, codigo_muestra TEXT, tipo_orden TEXT, tipo_resultado TEXT, tecnologo_id INTEGER, fecha_resultado TEXT, validado INTEGER, descripcion_orden TEXT);
+            CREATE TABLE IF NOT EXISTS orden_examenes (id SERIAL PRIMARY KEY, id_orden INTEGER, id_examen INTEGER, precio REAL);
+            CREATE TABLE IF NOT EXISTS resultados_lab (id SERIAL PRIMARY KEY, id_orden INTEGER, id_parametro INTEGER, resultado TEXT, fecha_creacion TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS imagenes_laboratorio (id SERIAL PRIMARY KEY, id_orden INTEGER, nombre_archivo TEXT, ruta_archivo TEXT, descripcion TEXT, fecha_subida TEXT, tipo_imagen TEXT);
+            CREATE TABLE IF NOT EXISTS plantillas_pdf (id SERIAL PRIMARY KEY, nombre TEXT, tipo TEXT, contenido_html TEXT, fecha_actualizacion TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS procedimientos (id SERIAL PRIMARY KEY, codigo TEXT, nombre TEXT, precio REAL, activo INTEGER DEFAULT 1);
+            CREATE TABLE IF NOT EXISTS servicios_examenes (id_servicio INTEGER, id_examen INTEGER, activo INTEGER DEFAULT 1);
+
+            CREATE TABLE IF NOT EXISTS triaje (id SERIAL PRIMARY KEY, id_paciente INTEGER, id_cita INTEGER, presion_arterial TEXT, temperatura REAL, frecuencia_cardiaca INTEGER, frecuencia_respiratoria INTEGER, peso REAL, talla REAL, imc REAL, sintomas TEXT, alergias TEXT, medicamentos_actuales TEXT, observaciones TEXT, id_enfermera INTEGER, fecha_hora TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS inyectables (id SERIAL PRIMARY KEY, id_paciente INTEGER, id_cita INTEGER, medicamento TEXT, dosis TEXT, via_administracion TEXT, lote TEXT, observaciones TEXT, id_enfermera INTEGER, fecha_hora TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS anexos_historia (id SERIAL PRIMARY KEY, id_paciente INTEGER, titulo TEXT, descripcion TEXT, ruta_archivo TEXT, tipo_archivo TEXT, fecha_subida TEXT DEFAULT CURRENT_TIMESTAMP, usuario_subio TEXT);
+            CREATE TABLE IF NOT EXISTS recetas (id SERIAL PRIMARY KEY, id_paciente INTEGER, id_cita INTEGER, numero_cuenta TEXT, fecha_emision TEXT, estado TEXT, diagnostico TEXT, indicaciones TEXT);
+        """, (generate_password_hash('admin123'),))
+        
+        conn.commit()
+        print("Base de datos inicializada/migrada correctamente en PostgreSQL.")
     except Exception as e:
         print(f"Error al inicializar la base de datos: {e}")
+        conn.rollback()
     finally:
         conn.close()
 # ========================== INICIO DE LA APP ==========================
