@@ -2500,18 +2500,19 @@ def configuracion_sistema():
 @login_required
 def subir_logo():
     if 'Configuración' not in get_user_modules(session.get('rol')): return redirect(url_for('dashboard'))
-    if request.method == 'POST':
+     if request.method == 'POST':
         file = request.files.get('logo_archivo')
         if file and file.filename:
+            import base64
             allowed = {'png','jpg','jpeg','gif'}
             if '.' in file.filename and file.filename.rsplit('.',1)[1].lower() in allowed:
-                try: img = Image.open(file); img.verify(); file.seek(0)
-                except: flash('Imagen inválida.', 'danger'); return redirect(url_for('subir_logo'))
-                ext = file.filename.rsplit('.',1)[1].lower()
-                filename = f"logo_{uuid.uuid4().hex}.{ext}"
-                file.save(os.path.join('static', filename))
+                file_data = file.read()
+                base64_str = base64.b64encode(file_data).decode('utf-8')
+                mime_type = file.mimetype or 'image/jpeg'
+                data_uri = f"data:{mime_type};base64,{base64_str}"
+                
                 conn = get_db_connection(); cur = conn.cursor()
-                cur.execute("UPDATE configuracion_sistema SET logo_path=? WHERE id=1", (filename,))
+                cur.execute("UPDATE configuracion_sistema SET logo_path=? WHERE id=1", (data_uri,))
                 conn.commit(); conn.close()
                 flash('Logo subido.', 'success')
                 return redirect(url_for('configuracion_sistema'))
@@ -2530,19 +2531,19 @@ def subir_logo():
 @app.route('/configuracion/subir_sello', methods=['GET','POST'])
 @login_required
 def subir_sello():
-    if 'Configuración' not in get_user_modules(session.get('rol')): return redirect(url_for('dashboard'))
-    if request.method == 'POST':
+        if request.method == 'POST':
         file = request.files.get('sello_archivo')
         if file and file.filename:
+            import base64
             allowed = {'png','jpg','jpeg','gif'}
             if '.' in file.filename and file.filename.rsplit('.',1)[1].lower() in allowed:
-                try: img = Image.open(file); img.verify(); file.seek(0)
-                except: flash('Imagen inválida.', 'danger'); return redirect(url_for('subir_sello'))
-                ext = file.filename.rsplit('.',1)[1].lower()
-                filename = f"sello_{uuid.uuid4().hex}.{ext}"
-                file.save(os.path.join('static', filename))
+                file_data = file.read()
+                base64_str = base64.b64encode(file_data).decode('utf-8')
+                mime_type = file.mimetype or 'image/jpeg'
+                data_uri = f"data:{mime_type};base64,{base64_str}"
+                
                 conn = get_db_connection(); cur = conn.cursor()
-                cur.execute("UPDATE configuracion_sistema SET sello_path=? WHERE id=1", (filename,))
+                cur.execute("UPDATE configuracion_sistema SET sello_path=? WHERE id=1", (data_uri,))
                 conn.commit(); conn.close()
                 flash('Sello subido.', 'success')
                 return redirect(url_for('configuracion_sistema'))
@@ -2561,19 +2562,19 @@ def subir_sello():
 @app.route('/configuracion/subir_fondo_login', methods=['GET','POST'])
 @login_required
 def subir_fondo_login():
-    if 'Configuración' not in get_user_modules(session.get('rol')): return redirect(url_for('dashboard'))
-    if request.method == 'POST':
+        if request.method == 'POST':
         file = request.files.get('fondo_archivo')
         if file and file.filename:
+            import base64
             allowed = {'png','jpg','jpeg','gif'}
             if '.' in file.filename and file.filename.rsplit('.',1)[1].lower() in allowed:
-                try: img = Image.open(file); img.verify(); file.seek(0)
-                except: flash('Imagen inválida.', 'danger'); return redirect(url_for('subir_fondo_login'))
-                ext = file.filename.rsplit('.',1)[1].lower()
-                filename = f"fondo_login_{uuid.uuid4().hex}.{ext}"
-                file.save(os.path.join('static', filename))
+                file_data = file.read()
+                base64_str = base64.b64encode(file_data).decode('utf-8')
+                mime_type = file.mimetype or 'image/jpeg'
+                data_uri = f"data:{mime_type};base64,{base64_str}"
+                
                 conn = get_db_connection(); cur = conn.cursor()
-                cur.execute("UPDATE configuracion_sistema SET login_background=? WHERE id=1", (filename,))
+                cur.execute("UPDATE configuracion_sistema SET login_background=? WHERE id=1", (data_uri,))
                 conn.commit(); conn.close()
                 flash('Fondo de login actualizado.', 'success')
                 return redirect(url_for('configuracion_sistema'))
@@ -2592,19 +2593,19 @@ def subir_fondo_login():
 @app.route('/configuracion/subir_fondo_sistema', methods=['GET','POST'])
 @login_required
 def subir_fondo_sistema():
-    if 'Configuración' not in get_user_modules(session.get('rol')): return redirect(url_for('dashboard'))
-    if request.method == 'POST':
+        if request.method == 'POST':
         file = request.files.get('fondo_archivo')
         if file and file.filename:
+            import base64
             allowed = {'png','jpg','jpeg','gif'}
             if '.' in file.filename and file.filename.rsplit('.',1)[1].lower() in allowed:
-                try: img = Image.open(file); img.verify(); file.seek(0)
-                except: flash('Imagen inválida.', 'danger'); return redirect(url_for('subir_fondo_sistema'))
-                ext = file.filename.rsplit('.',1)[1].lower()
-                filename = f"fondo_sistema_{uuid.uuid4().hex}.{ext}"
-                file.save(os.path.join('static', filename))
+                file_data = file.read()
+                base64_str = base64.b64encode(file_data).decode('utf-8')
+                mime_type = file.mimetype or 'image/jpeg'
+                data_uri = f"data:{mime_type};base64,{base64_str}"
+                
                 conn = get_db_connection(); cur = conn.cursor()
-                cur.execute("UPDATE configuracion_sistema SET system_background=? WHERE id=1", (filename,))
+                cur.execute("UPDATE configuracion_sistema SET system_background=? WHERE id=1", (data_uri,))
                 conn.commit(); conn.close()
                 flash('Fondo del sistema actualizado.', 'success')
                 return redirect(url_for('configuracion_sistema'))
